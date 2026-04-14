@@ -83,10 +83,10 @@ export async function POST(request: NextRequest) {
     const dbEmployees = await db.employee.findMany({ orderBy: { order: "asc" } });
     const dbSettings = await db.settings.findUnique();
 
-    // Filter employees by region if specified
+    // Filter employees by region if specified (include 'all' region employees everywhere)
     let regionDbEmployees = dbEmployees;
     if (region && region !== "all") {
-      regionDbEmployees = dbEmployees.filter((e) => e.region === region);
+      regionDbEmployees = dbEmployees.filter((e) => e.region === region || e.region === "all");
     }
 
     const employees: Employee[] = regionDbEmployees.map((e) => ({
@@ -185,14 +185,13 @@ export async function POST(request: NextRequest) {
       const monthKey = `${year}-${String(month).padStart(2, "0")}`;
       const regionEmpNames = new Set(activeEmployees.map((e) => e.name));
 
-      // Delete existing non-manual entries for this month + region
+      // Delete existing non-manual entries for this month + region (batch operation)
       if (region && region !== "all") {
-        // Collect IDs to delete (avoid extra DB fetch)
-        const toDelete = existingDbEntries.filter(
-          (e) => e.date.startsWith(monthKey) && !e.isManual && regionEmpNames.has(e.empName)
-        );
-        for (const entry of toDelete) {
-          await db.scheduleEntry.delete({ where: { id: entry.id } });
+        const toDeleteIds = existingDbEntries
+          .filter((e) => e.date.startsWith(monthKey) && !e.isManual && regionEmpNames.has(e.empName))
+          .map((e) => e.id);
+        if (toDeleteIds.length > 0) {
+          await db.scheduleEntry.deleteByIds(toDeleteIds);
         }
       } else {
         await db.scheduleEntry.deleteMany({
@@ -257,16 +256,17 @@ export async function POST(request: NextRequest) {
       const newDates = new Set(newEntries.map((e) => e.date));
       const newMonthKeys = new Set(newEntries.map((e) => e.date.substring(0, 7)));
 
-      // Delete overlapping entries — if region is specified, only delete for that region's employees
+      // Delete overlapping entries — if region is specified, only delete for that region's employees (batch)
       if (region && region !== "all") {
         const regionEmpNames = new Set(activeEmployees.map((e) => e.name));
         const overlappingEntries = await db.scheduleEntry.findMany({
           where: { date: { in: Array.from(newDates) } },
         });
-        for (const entry of overlappingEntries) {
-          if (!entry.isManual && regionEmpNames.has(entry.empName)) {
-            await db.scheduleEntry.delete({ where: { id: entry.id } });
-          }
+        const toDeleteIds = overlappingEntries
+          .filter((entry) => !entry.isManual && regionEmpNames.has(entry.empName))
+          .map((entry) => entry.id);
+        if (toDeleteIds.length > 0) {
+          await db.scheduleEntry.deleteByIds(toDeleteIds);
         }
       } else {
         await db.scheduleEntry.deleteMany({

@@ -830,6 +830,18 @@ export const db = {
       return { count: updates.length };
     },
 
+    async deleteByIds(ids: number[]) {
+      await ensureInit();
+      const client = getClient();
+      if (ids.length === 0) return { count: 0 };
+      const placeholders = ids.map(() => "?").join(", ");
+      const result = await client.execute({
+        sql: `DELETE FROM schedule_entries WHERE id IN (${placeholders})`,
+        args: ids,
+      });
+      return { count: result.rowsAffected };
+    },
+
     async deleteMany(args: { where: Record<string, unknown> }) {
       await ensureInit();
       const client = getClient();
