@@ -352,6 +352,10 @@ export default function ShiftSchedulerPage() {
   const [showAddConnection, setShowAddConnection] = useState(false);
   const [connWeekIdx, setConnWeekIdx] = useState(0);
   const [connEmpIdx, setConnEmpIdx] = useState("");
+  // Connection Team replacement
+  const [showReplaceConnection, setShowReplaceConnection] = useState(false);
+  const [replaceSourceId, setReplaceSourceId] = useState<number | null>(null);
+  const [replaceTargetEmp, setReplaceTargetEmp] = useState("");
 
   // Region rotation
   const [regionRotations, setRegionRotations] = useState<RegionRotationEntry[]>([]);
@@ -437,7 +441,8 @@ export default function ShiftSchedulerPage() {
 
   const fetchConnectionTeam = useCallback(async () => {
     try {
-      const res = await authFetch(`/api/connection-team?month=${selectedMonth}`);
+      const regionParam = selectedRegion !== "all" ? `&region=${selectedRegion}` : "";
+      const res = await authFetch(`/api/connection-team?month=${selectedMonth}${regionParam}`);
       if (res.ok) {
         const data = await res.json();
         setConnectionTeam(data.entries || []);
@@ -1032,7 +1037,7 @@ export default function ShiftSchedulerPage() {
 
       const res = await authFetch("/api/connection-team", {
         method: "POST",
-        body: JSON.stringify({ weekStart, weekEnd, empIdx: Number(connEmpIdx), empName: emp.name, empHrid: emp.hrid, monthKey: selectedMonth }),
+        body: JSON.stringify({ weekStart, weekEnd, empIdx: Number(connEmpIdx), empName: emp.name, empHrid: emp.hrid, monthKey: selectedMonth, region: selectedRegion || "all" }),
       });
       if (res.ok) {
         toast({ title: "Added", description: `Connection person assigned for ${weekStart} to ${weekEnd}` });
@@ -1057,6 +1062,41 @@ export default function ShiftSchedulerPage() {
       }
     } catch {
       toast({ title: "Error", description: "Failed to delete", variant: "destructive" });
+    }
+  };
+
+  const replaceConnectionPerson = async () => {
+    if (!replaceSourceId || !replaceTargetEmp) {
+      toast({ title: "Error", description: "Please select a replacement employee", variant: "destructive" });
+      return;
+    }
+    const targetEmp = regionActiveEmps.find(e => e.name === replaceTargetEmp);
+    if (!targetEmp) return;
+
+    try {
+      const res = await authFetch("/api/connection-team", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "replace",
+          sourceId: replaceSourceId,
+          targetEmpName: targetEmp.name,
+          targetEmpHrid: targetEmp.hrid,
+          targetEmpIdx: regionActiveEmps.indexOf(targetEmp),
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        toast({ title: "Replaced", description: data.message || "Connection shift replaced successfully" });
+        setShowReplaceConnection(false);
+        setReplaceSourceId(null);
+        setReplaceTargetEmp("");
+        fetchConnectionTeam();
+      } else {
+        const data = await res.json();
+        toast({ title: "Error", description: data.error || "Failed to replace", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", description: "Failed to replace connection person", variant: "destructive" });
     }
   };
 
@@ -1123,16 +1163,13 @@ export default function ShiftSchedulerPage() {
 
   // ===== Region-filtered entries =====
   const monthEntries = entries.filter((e) => e.date.startsWith(selectedMonth));
-  const filteredEntries = selectedRegion === "all" ? monthEntries : monthEntries.filter((e) => {
-    const emp = employees.find(emp => emp.name === e.empName);
-    return emp && (emp.region === selectedRegion || emp.region === "all");
-  });
-  const regionActiveEmps = employees.filter((e) => e.active && (selectedRegion === "all" || e.region === selectedRegion || e.region === "all"));
-  const connectionEmpSet = new Set(connectionTeam.filter((ct) => {
-    if (selectedRegion === "all") return true;
-    const emp = employees.find(e => e.name === ct.empName);
-    return emp && (emp.region === selectedRegion || emp.region === "all");
-  }).map((c) => `${c.empName}-${c.weekStart}`));
+  // Strict region filtering - entries are already filtered by the API via DB region column
+  const filteredEntries = monthEntries;
+  // Only show employees belonging to the selected region
+  const regionActiveEmps = selectedRegion === "all" 
+    ? employees.filter((e) => e.active) 
+    : employees.filter((e) => e.active && e.region === selectedRegion);
+  const connectionEmpSet = new Set(connectionTeam.map((c) => `${c.empName}-${c.weekStart}`));
 
   // Build connection team lookup by week start date
   const connectionByWeek = new Map<string, ConnectionTeamEntry>();
@@ -1404,10 +1441,9 @@ export default function ShiftSchedulerPage() {
                   {canAdmin && <th className="px-3 py-2 text-center text-xs text-slate-500">Actions</th>}
                 </tr></thead>
                 <tbody>
-                  {connectionTeam.filter(ct => {
-                    if (selectedRegion === "all") return true;
-                    const emp = employees.find(e => e.name === ct.empName);
-                    return emp && (emp.region === selectedRegion || emp.region === "all");
+                  {connectionTeam.filter(() => {
+                    // Connection team entries are already filtered by region via API
+                    return true;
                   }).map((ct) => {
                     const connHrs = calcConnectionWeekHours(ct.weekStart, ct.weekEnd);
                     return (
@@ -1416,7 +1452,7 @@ export default function ShiftSchedulerPage() {
                       <td className="px-3 py-2 text-sm font-semibold text-teal-700 dark:text-teal-300">{ct.empName}</td>
                       <td className="px-3 py-2 text-xs text-slate-500 hidden sm:table-cell">{ct.empHrid}</td>
                       <td className="px-3 py-2 text-center"><span className="font-bold text-teal-600 dark:text-teal-400 text-sm">{connHrs.toFixed(1)}h</span></td>
-                      {canAdmin && <td className="px-3 py-2 text-center"><Button size="icon" variant="ghost" className="h-7 w-7 text-red-400 hover:text-red-600" onClick={() => deleteConnectionEntry(ct.id)}><Trash2 className="h-3.5 w-3.5" /></Button></td>}
+                      {canAdmin && <td className="px-3 py-2 text-center flex gap-1 justify-center"><Button size="icon" variant="ghost" className="h-7 w-7 text-blue-400 hover:text-blue-600" onClick={() => { setReplaceSourceId(ct.id); setReplaceTargetEmp(""); setShowReplaceConnection(true); }} title="Replace"><ArrowLeftRight className="h-3.5 w-3.5" /></Button><Button size="icon" variant="ghost" className="h-7 w-7 text-red-400 hover:text-red-600" onClick={() => deleteConnectionEntry(ct.id)}><Trash2 className="h-3.5 w-3.5" /></Button></td>}
                     </tr>
                     );
                   })}
@@ -1971,6 +2007,30 @@ export default function ShiftSchedulerPage() {
               })()}
             </div>
             <DialogFooter><Button variant="outline" onClick={() => setShowAddConnection(false)}>Cancel</Button><Button onClick={addConnectionPerson} className="bg-teal-600 hover:bg-teal-700 text-white">Assign</Button></DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* ===== REPLACE CONNECTION TEAM MODAL ===== */}
+        <Dialog open={showReplaceConnection} onOpenChange={setShowReplaceConnection}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader><DialogTitle className="flex items-center gap-2"><ArrowLeftRight className="h-5 w-5" /> Replace Connection Person (استبدال)</DialogTitle><DialogDescription>Replace a Connection Team member with another employee</DialogDescription></DialogHeader>
+            <div className="space-y-3 mt-2">
+              <div className="bg-teal-50 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-800 rounded-lg p-3">
+                <p className="text-xs text-teal-700 dark:text-teal-300 font-medium">Current: {connectionTeam.find(ct => ct.id === replaceSourceId)?.empName}</p>
+                <p className="text-xs text-slate-500 mt-1">Week: {connectionTeam.find(ct => ct.id === replaceSourceId)?.weekStart} → {connectionTeam.find(ct => ct.id === replaceSourceId)?.weekEnd}</p>
+              </div>
+              <div><Label className="text-xs">Replace With (استبدال بـ)</Label>
+                <Select value={replaceTargetEmp} onValueChange={setReplaceTargetEmp}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select employee..." /></SelectTrigger>
+                  <SelectContent>
+                    {regionActiveEmps.map((emp, idx) => (
+                      <SelectItem key={emp.id} value={emp.name}>{emp.name} ({emp.hrid})</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter><Button variant="outline" onClick={() => setShowReplaceConnection(false)}>Cancel</Button><Button onClick={replaceConnectionPerson} className="bg-blue-600 hover:bg-blue-700 text-white" disabled={!replaceTargetEmp}>Replace</Button></DialogFooter>
           </DialogContent>
         </Dialog>
 

@@ -4,7 +4,7 @@ import { computeLocalStats, computeOffWeeks } from "@/lib/scheduler";
 import type { ScheduleEntry } from "@/lib/scheduler";
 import { db } from "@/lib/db";
 
-// GET: Get stats/report data (in-memory store backed)
+// GET: Get stats/report data (region-isolated)
 export async function GET(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
@@ -20,27 +20,24 @@ export async function GET(request: NextRequest) {
       effectiveRegion = auth.region;
     }
 
-    // Fetch employees (filter by region for non-admin users)
+    // Fetch employees (strict region match)
     let dbEmployees = await db.employee.findMany({ orderBy: { order: "asc" } });
     if (effectiveRegion && effectiveRegion !== "all") {
-      dbEmployees = dbEmployees.filter((e) => e.region === effectiveRegion || e.region === "all");
+      dbEmployees = dbEmployees.filter((e) => e.region === effectiveRegion);
     }
     const employees = dbEmployees.filter((e) => e.active);
 
-    // Fetch entries
+    // Fetch entries using DB region column for strict isolation
     const whereClause: Record<string, unknown> = {};
     if (month) whereClause.date = { startsWith: month };
+    if (effectiveRegion && effectiveRegion !== "all") {
+      whereClause.region = effectiveRegion;
+    }
 
-    let dbEntries = await db.scheduleEntry.findMany({
+    const dbEntries = await db.scheduleEntry.findMany({
       where: whereClause,
       orderBy: { date: "asc" },
     });
-
-    // Filter entries by region if needed
-    if (effectiveRegion && effectiveRegion !== "all") {
-      const regionEmpNames = new Set(dbEmployees.map((e) => e.name));
-      dbEntries = dbEntries.filter((e) => regionEmpNames.has(e.empName));
-    }
 
     const entries: ScheduleEntry[] = dbEntries.map((e) => ({
       date: e.date,

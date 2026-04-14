@@ -49,6 +49,7 @@ export interface StoreScheduleEntry {
   isHoliday: number;
   isManual: number;
   monthKey: string;
+  region: string;
   createdAt: string;
 }
 
@@ -77,6 +78,7 @@ export interface StoreConnectionEntry {
   empName: string;
   empHrid: string;
   monthKey: string;
+  region: string;
   createdAt: string;
 }
 
@@ -243,6 +245,20 @@ async function initSchema() {
     try { await client.execute("ALTER TABLE settings ADD COLUMN day_hours TEXT NOT NULL DEFAULT '{}'"); } catch { /* ignore */ }
   }
 
+  // Migration: add region column to schedule_entries for strict data isolation
+  try {
+    await client.execute("SELECT region FROM schedule_entries LIMIT 0");
+  } catch {
+    try { await client.execute("ALTER TABLE schedule_entries ADD COLUMN region TEXT NOT NULL DEFAULT 'all'"); } catch { /* ignore */ }
+  }
+
+  // Migration: add region column to connection_team
+  try {
+    await client.execute("SELECT region FROM connection_team LIMIT 0");
+  } catch {
+    try { await client.execute("ALTER TABLE connection_team ADD COLUMN region TEXT NOT NULL DEFAULT 'all'"); } catch { /* ignore */ }
+  }
+
   // Seed default admin if no users exist
   const adminResult = await client.execute("SELECT COUNT(*) as cnt FROM users");
   if (adminResult.rows[0]?.cnt === 0) {
@@ -350,6 +366,7 @@ function rowToEntry(row: Record<string, unknown>): StoreScheduleEntry {
     isHoliday: Number(row.is_holiday) === 1,
     isManual: Number(row.is_manual) === 1,
     monthKey: String(row.month_key),
+    region: row.region ? String(row.region) : "all",
     createdAt: String(row.created_at),
   };
 }
@@ -384,6 +401,7 @@ function rowToConnectionEntry(row: Record<string, unknown>): StoreConnectionEntr
     empName: String(row.emp_name),
     empHrid: String(row.emp_hrid),
     monthKey: String(row.month_key),
+    region: row.region ? String(row.region) : "all",
     createdAt: String(row.created_at),
   };
 }
@@ -682,6 +700,10 @@ export const db = {
         sql += " AND is_manual = ?";
         values.push(where.isManual ? 1 : 0);
       }
+      if (where.region) {
+        sql += " AND region = ?";
+        values.push(where.region);
+      }
 
       if (args?.orderBy) {
         const [key, dir] = Object.entries(args.orderBy)[0];
@@ -714,14 +736,14 @@ export const db = {
       const now = new Date().toISOString();
 
       const result = await client.execute({
-        sql: `INSERT INTO schedule_entries (date, day_name, day_type, emp_idx, emp_name, emp_hrid, start, "end", hours, off_person, off_person_idx, off_person_hrid, week_num, is_holiday, is_manual, month_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO schedule_entries (date, day_name, day_type, emp_idx, emp_name, emp_hrid, start, "end", hours, off_person, off_person_idx, off_person_hrid, week_num, is_holiday, is_manual, month_key, region, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           args.data.date, args.data.dayName, args.data.dayType,
           args.data.empIdx, args.data.empName, args.data.empHrid,
           args.data.start, args.data.end, args.data.hours,
           args.data.offPerson, args.data.offPersonIdx, args.data.offPersonHrid,
           args.data.weekNum, args.data.isHoliday ? 1 : 0, args.data.isManual ? 1 : 0,
-          args.data.monthKey, now,
+          args.data.monthKey, args.data.region || "all", now,
         ],
       });
 
@@ -739,10 +761,10 @@ export const db = {
 
       const now = new Date().toISOString();
       const rowPlaceholders = args.data
-        .map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .join(", ");
 
-      const sql = `INSERT INTO schedule_entries (date, day_name, day_type, emp_idx, emp_name, emp_hrid, start, "end", hours, off_person, off_person_idx, off_person_hrid, week_num, is_holiday, is_manual, month_key, created_at) VALUES ${rowPlaceholders}`;
+      const sql = `INSERT INTO schedule_entries (date, day_name, day_type, emp_idx, emp_name, emp_hrid, start, "end", hours, off_person, off_person_idx, off_person_hrid, week_num, is_holiday, is_manual, month_key, region, created_at) VALUES ${rowPlaceholders}`;
 
       const values: unknown[] = [];
       for (const d of args.data) {
@@ -752,7 +774,7 @@ export const db = {
           d.start, d.end, d.hours,
           d.offPerson, d.offPersonIdx, d.offPersonHrid,
           d.weekNum, d.isHoliday ? 1 : 0, d.isManual ? 1 : 0,
-          d.monthKey, now,
+          d.monthKey, d.region || "all", now,
         );
       }
 
@@ -962,7 +984,7 @@ export const db = {
 
   // ===== ConnectionTeam Model =====
   connectionTeam: {
-    async findMany(args?: { where?: { monthKey?: string } }) {
+    async findMany(args?: { where?: { monthKey?: string; region?: string } }) {
       await ensureInit();
       const client = getClient();
 
@@ -971,6 +993,10 @@ export const db = {
       if (args?.where?.monthKey) {
         sql += " AND month_key = ?";
         values.push(args.where.monthKey);
+      }
+      if (args?.where?.region) {
+        sql += " AND region = ?";
+        values.push(args.where.region);
       }
       sql += " ORDER BY week_start ASC";
 
@@ -984,8 +1010,8 @@ export const db = {
       const now = new Date().toISOString();
 
       const result = await client.execute({
-        sql: `INSERT INTO connection_team (week_start, week_end, emp_idx, emp_name, emp_hrid, month_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        args: [args.data.weekStart, args.data.weekEnd, args.data.empIdx, args.data.empName, args.data.empHrid, args.data.monthKey, now],
+        sql: `INSERT INTO connection_team (week_start, week_end, emp_idx, emp_name, emp_hrid, month_key, region, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [args.data.weekStart, args.data.weekEnd, args.data.empIdx, args.data.empName, args.data.empHrid, args.data.monthKey, args.data.region || "all", now],
       });
 
       return {
