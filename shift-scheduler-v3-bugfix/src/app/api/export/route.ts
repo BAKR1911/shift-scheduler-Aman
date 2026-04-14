@@ -11,7 +11,7 @@ const MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June",
 const TEAL = "0D9488";
 const LIGHT_TEAL = "CCFBF1";
 
-// POST: Export schedule as Excel with Connection Team separate sheet
+// POST: Export schedule as Excel with region filtering + Connection Team separate sheet
 export async function POST(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
@@ -22,8 +22,8 @@ export async function POST(request: NextRequest) {
     const { month, selectedEmployeeIds, dateFrom, dateTo, region } = body;
 
     // Determine effective region
-    let effectiveRegion = region || (auth.role !== "admin" ? auth.region : "all") || "all";
-    if (effectiveRegion === "all" && auth.region && auth.region !== "all") {
+    let effectiveRegion = region || "all";
+    if (auth.region && auth.region !== "all") {
       effectiveRegion = auth.region;
     }
 
@@ -32,20 +32,22 @@ export async function POST(request: NextRequest) {
     const dbSettings = await db.settings.findUnique();
     const genMonths = await db.generatedMonth.findMany({ orderBy: { monthKey: "asc" } });
 
-    // STRICT region filtering for employees
-    let regionEmployees = dbEmployees;
-    if (effectiveRegion !== "all") {
-      regionEmployees = dbEmployees.filter(e => e.region === effectiveRegion);
-    }
-
-    let employees = regionEmployees.map((e) => ({
+    // Filter employees by region
+    let employees = dbEmployees.map((e) => ({
       id: e.id,
       name: e.name,
       hrid: e.hrid,
       active: e.active,
     }));
 
-    // Filter employees if specific selection provided
+    if (effectiveRegion !== "all") {
+      employees = employees.filter((e) => {
+        const dbEmp = dbEmployees.find(de => de.id === e.id);
+        return dbEmp && dbEmp.region === effectiveRegion;
+      });
+    }
+
+    // Further filter if specific selection provided
     if (selectedEmployeeIds && Array.isArray(selectedEmployeeIds) && selectedEmployeeIds.length > 0) {
       employees = employees.filter((e) => selectedEmployeeIds.includes(e.id));
     }
@@ -59,14 +61,11 @@ export async function POST(request: NextRequest) {
       dayHours: dbSettings ? JSON.parse(dbSettings.dayHours || "{}") : {},
     };
 
-    // Fetch connection team entries (region-aware)
-    const connWhere: { monthKey?: string; region?: string } = {};
-    if (month) connWhere.monthKey = month;
-    if (effectiveRegion && effectiveRegion !== "all") connWhere.region = effectiveRegion;
-
-    const connectionTeam = month
-      ? await db.connectionTeam.findMany({ where: connWhere })
-      : await db.connectionTeam.findMany({ where: effectiveRegion && effectiveRegion !== "all" ? { region: effectiveRegion } : undefined });
+    // Fetch connection team entries
+    const connMonthKey = month || "";
+    const connectionTeam = connMonthKey
+      ? await db.connectionTeam.findMany({ where: { monthKey: connMonthKey } })
+      : await db.connectionTeam.findMany();
 
     // Build connection lookup by weekStart
     const connByWeek = new Map<string, { empName: string; empHrid: string; weekStart: string; weekEnd: string }>();
@@ -88,29 +87,21 @@ export async function POST(request: NextRequest) {
 
     // Build per-employee connection hours map
     const connHoursByEmp = new Map<string, number>();
+    const connWeeksByEmp = new Map<string, string[]>();
     for (const ct of connectionTeam) {
       const hrs = calcConnWeekHours(ct.weekStart, ct.weekEnd);
       connHoursByEmp.set(ct.empName, (connHoursByEmp.get(ct.empName) || 0) + hrs);
+      if (!connWeeksByEmp.has(ct.empName)) connWeeksByEmp.set(ct.empName, []);
+      connWeeksByEmp.get(ct.empName)!.push(`${ct.weekStart} >> ${ct.weekEnd}`);
     }
 
-    // Build per-employee connection weeks map (for detail sheet)
-    const connWeeksByEmp = new Map<string, { weekStart: string; weekEnd: string; hours: number }[]>();
-    for (const ct of connectionTeam) {
-      const hrs = calcConnWeekHours(ct.weekStart, ct.weekEnd);
-      const existing = connWeeksByEmp.get(ct.empName) || [];
-      existing.push({ weekStart: ct.weekStart, weekEnd: ct.weekEnd, hours: hrs });
-      connWeeksByEmp.set(ct.empName, existing);
-    }
-
-    // Fetch entries with strict region filtering using DB column
+    // Fetch schedule entries filtered by region
     const whereClause: Record<string, unknown> = {};
     if (month) whereClause.date = { startsWith: month };
     if (dateFrom && dateTo) whereClause.date = { gte: dateFrom, lte: dateTo };
     if (dateFrom && !dateTo) whereClause.date = { gte: dateFrom };
     if (!dateFrom && dateTo) whereClause.date = { lte: dateTo };
-    if (effectiveRegion && effectiveRegion !== "all") {
-      whereClause.region = effectiveRegion;
-    }
+    if (effectiveRegion !== "all") whereClause.region = effectiveRegion;
 
     const dbEntries = await db.scheduleEntry.findMany({
       where: whereClause,
@@ -142,7 +133,7 @@ export async function POST(request: NextRequest) {
       entriesList = entriesList.filter((e) => selectedEmpNames.has(e.empName));
     }
 
-    if (entriesList.length === 0 && connectionTeam.length === 0) {
+    if (entriesList.length === 0) {
       return NextResponse.json({ error: "No entries to export" }, { status: 404 });
     }
 
@@ -151,16 +142,12 @@ export async function POST(request: NextRequest) {
     const offWeeksMap = computeOffWeeks(entriesList, n);
 
     let period = "All Months";
+    const regionLabel = effectiveRegion !== "all" ? ` [${effectiveRegion}]` : "";
     if (month) {
       const [y, m] = month.split("-");
-      period = `${MONTH_NAMES[Number(m)]} ${y}`;
+      period = `${MONTH_NAMES[Number(m)]} ${y}${regionLabel}`;
     }
-    if (dateFrom && dateTo) period = `${dateFrom} to ${dateTo}`;
-
-    // Add region label
-    const regionLabel = effectiveRegion && effectiveRegion !== "all" 
-      ? ` [${effectiveRegion.toUpperCase()}]` 
-      : "";
+    if (dateFrom && dateTo) period = `${dateFrom} to ${dateTo}${regionLabel}`;
 
     const wb = new ExcelJS.Workbook();
     wb.creator = "IT Helpdesk Shift Scheduler";
@@ -179,13 +166,13 @@ export async function POST(request: NextRequest) {
     const LIGHT_PURPLE = "F3E8FF";
     const N600 = "64748B";
 
-    // ===================== SHEET 1: DAILY SCHEDULE =====================
+    // SHEET 1: DAILY SCHEDULE (no Connection Team inline — moved to separate sheet)
     const ws1 = wb.addWorksheet("Schedule", { properties: { tabColor: { argb: BLUE } } });
     [5, 14, 14, 12, 24, 12, 14, 14, 10, 20, 12].forEach((w, i) => ws1.getColumn(i + 1).width = w);
 
     ws1.mergeCells("A1:K1");
     const titleCell = ws1.getCell("A1");
-    titleCell.value = `IT Helpdesk - Shift Schedule (${period})${regionLabel}`;
+    titleCell.value = `IT Helpdesk - Shift Schedule (${period})`;
     titleCell.font = { size: 16, bold: true, color: { argb: PRIMARY } };
     titleCell.alignment = { vertical: "middle" };
     ws1.getRow(1).height = 36;
@@ -193,7 +180,6 @@ export async function POST(request: NextRequest) {
     const totalHrs = entriesList.reduce((sum, e) => sum + e.hours, 0);
     const nWeeks = new Set(entriesList.map((e) => `${e.date.substring(0, 7)}-W${e.weekNum}`)).size;
     const holidays = entriesList.filter((e) => e.isHoliday).length;
-    const totalConnHrs = Array.from(connHoursByEmp.values()).reduce((a, b) => a + b, 0);
 
     const kpis = [
       { label: "Weeks", value: nWeeks },
@@ -242,6 +228,7 @@ export async function POST(request: NextRequest) {
       weekGroups[wk].push(e);
     }
 
+    // Build a map from week entries to their Friday-based weekStart
     function getFridayOfWeek(dateStr: string): string {
       const d = new Date(dateStr + "T00:00:00");
       while (d.getDay() !== 5) d.setDate(d.getDate() - 1);
@@ -256,9 +243,11 @@ export async function POST(request: NextRequest) {
       const weekFriStart = getFridayOfWeek(weekEntries[0].date);
       const connPerson = connByWeek.get(weekFriStart);
 
+      // Build week header text
       let weekHeaderText = `Week ${weekIndex + 1}: ${weekEntries[0].date} >> ${weekEntries[weekEntries.length - 1].date}  |  ${weekEntries.length} days  |  ${wh.toFixed(1)}h  |  OFF: ${offPerson}`;
       if (connPerson) {
-        weekHeaderText += `  |  Connection Team: ${connPerson.empName}`;
+        const connWeekHrs = calcConnWeekHours(connPerson.weekStart, connPerson.weekEnd);
+        weekHeaderText += `  |  Connection Team: ${connPerson.empName} (${connWeekHrs.toFixed(1)}h)`;
       }
 
       ws1.mergeCells(row, 1, row, 11);
@@ -270,19 +259,6 @@ export async function POST(request: NextRequest) {
       ws1.getRow(row).height = 26;
       row++;
       weekIndex++;
-
-      // Connection Team sub-row
-      if (connPerson) {
-        const connWeekHrs = calcConnWeekHours(connPerson.weekStart, connPerson.weekEnd);
-        ws1.mergeCells(row, 1, row, 11);
-        const connRowCell = ws1.getCell(row, 1);
-        connRowCell.value = `  Connection Team: ${connPerson.empName} (${connPerson.empHrid}) | Week Hours: ${connWeekHrs.toFixed(1)}h`;
-        connRowCell.font = { size: 10, italic: true, color: { argb: TEAL } };
-        connRowCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT_TEAL } };
-        connRowCell.alignment = { vertical: "middle" };
-        ws1.getRow(row).height = 22;
-        row++;
-      }
 
       for (const e of weekEntries) {
         entryNum++;
@@ -319,16 +295,16 @@ export async function POST(request: NextRequest) {
     }
     ws1.views = [{ state: "frozen", ySplit: headerRow }];
 
-    // ===================== SHEET 2: EMPLOYEE SUMMARY =====================
+    // SHEET 2: EMPLOYEE SUMMARY (without Connection hours — they have their own sheet)
     const ws2 = wb.addWorksheet("Employee Summary", { properties: { tabColor: { argb: GREEN } } });
-    [5, 24, 12, 14, 14, 14, 14, 14, 16, 14, 14].forEach((w, i) => ws2.getColumn(i + 1).width = w);
+    [5, 24, 12, 14, 14, 14, 14, 14, 16, 14].forEach((w, i) => ws2.getColumn(i + 1).width = w);
 
-    ws2.mergeCells("A1:K1");
-    ws2.getCell("A1").value = `IT Helpdesk - Employee Summary (${period})${regionLabel}`;
+    ws2.mergeCells("A1:J1");
+    ws2.getCell("A1").value = `IT Helpdesk - Employee Summary (${period})`;
     ws2.getCell("A1").font = { size: 16, bold: true, color: { argb: PRIMARY } };
     ws2.getRow(1).height = 36;
 
-    const summaryHeaders = ["#", "Employee Name", "HRID", "Work Days", "Schedule Hours", "Sat Days", "Fri Days", "Weekend Days", "Connection Hours", "Total Hours", "OFF Weeks"];
+    const summaryHeaders = ["#", "Employee Name", "HRID", "Work Days", "Schedule Hours", "Sat Days", "Fri Days", "Weekend Days", "Total Hours", "OFF Weeks"];
     const shRow = ws2.getRow(4);
     shRow.height = 28;
     summaryHeaders.forEach((h, ci) => {
@@ -343,10 +319,8 @@ export async function POST(request: NextRequest) {
       const r = 5 + i;
       const ls = localStats[i] || { days: 0, hours: 0, weekend: 0, sat: 0, fri: 0, offWeeks: 0 };
       const offW = offWeeksMap[i] || 0;
-      const connHrs = connHoursByEmp.get(emp.name) || 0;
-      const totalEmpHrs = Math.round((ls.hours + connHrs) * 10) / 10;
       const fill = i % 2 === 0 ? "FFFFFF" : LIGHT_GRAY;
-      const vals = [i + 1, emp.name, emp.hrid, ls.days, Math.round(ls.hours * 10) / 10, ls.sat, ls.fri, ls.weekend, Math.round(connHrs * 10) / 10, totalEmpHrs, offW];
+      const vals = [i + 1, emp.name, emp.hrid, ls.days, Math.round(ls.hours * 10) / 10, ls.sat, ls.fri, ls.weekend, Math.round(ls.hours * 10) / 10, offW];
       const dataRow = ws2.getRow(r);
       dataRow.height = 22;
       vals.forEach((val, ci) => {
@@ -358,33 +332,19 @@ export async function POST(request: NextRequest) {
         if (ci === 1) cell.alignment = { horizontal: "left", vertical: "middle" };
         if (ci === 4) { cell.numFmt = "0.0"; cell.font = { color: { argb: BLUE }, bold: true }; }
         if (ci === 8) {
-          if (connHrs > 0) {
-            cell.numFmt = "0.0";
-            cell.font = { color: { argb: TEAL }, bold: true };
-            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT_TEAL } };
-          }
-        }
-        if (ci === 9) {
           cell.numFmt = "0.0";
           cell.font = { color: { argb: PRIMARY }, bold: true };
-          if (connHrs > 0) {
-            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT_TEAL } };
-          }
         }
-        if (ci === 10) cell.font = { color: { argb: RED }, bold: true };
+        if (ci === 9) cell.font = { color: { argb: RED }, bold: true };
       });
     });
 
-    const allHrs = employees.map((_, i) => {
-      const ls = localStats[i]?.hours || 0;
-      const connHrs = connHoursByEmp.get(employees[i]?.name || "") || 0;
-      return ls + connHrs;
-    });
+    const allHrs = employees.map((_, i) => localStats[i]?.hours || 0);
     const variance = allHrs.length > 0 ? Math.max(...allHrs) - Math.min(...allHrs) : 0;
     const avgHrs = allHrs.length > 0 ? allHrs.reduce((a, b) => a + b, 0) / allHrs.length : 0;
     const vr = 5 + employees.length + 1;
 
-    ws2.getCell(vr, 2).value = "Average Hours / Person (incl. Connection Team)";
+    ws2.getCell(vr, 2).value = "Average Hours / Person";
     ws2.getCell(vr, 2).font = { bold: true };
     ws2.getCell(vr, 2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT_BLUE } };
     ws2.getCell(vr, 5).value = Math.round(avgHrs * 10) / 10;
@@ -402,16 +362,153 @@ export async function POST(request: NextRequest) {
     ws2.getCell(vr + 1, 5).numFmt = "0.0";
     ws2.getCell(vr + 1, 5).alignment = { horizontal: "center" };
 
-    // ===================== SHEET 3: CUMULATIVE BALANCE =====================
-    const ws3 = wb.addWorksheet("Cumulative Balance", { properties: { tabColor: { argb: "D97706" } } });
-    [5, 24, 12, 14, 14, 14, 14, 14].forEach((w, i) => ws3.getColumn(i + 1).width = w);
+    // SHEET 3: CONNECTION TEAM (Separate dedicated sheet)
+    const ws3 = wb.addWorksheet("Connection Team", { properties: { tabColor: { argb: TEAL } } });
+    [5, 24, 12, 14, 30, 14, 14].forEach((w, i) => ws3.getColumn(i + 1).width = w);
 
-    ws3.mergeCells("A1:H1");
-    ws3.getCell("A1").value = `IT Helpdesk - Cumulative Balance (All Months)${regionLabel}`;
-    ws3.getCell("A1").font = { size: 16, bold: true, color: { argb: PRIMARY } };
+    ws3.mergeCells("A1:G1");
+    ws3.getCell("A1").value = `Connection Team - تيم الكونكشن (${period})`;
+    ws3.getCell("A1").font = { size: 16, bold: true, color: { argb: TEAL } };
     ws3.getRow(1).height = 36;
 
-    let row3 = 3;
+    // Connection Team summary header
+    const ctHeaders = ["#", "Employee Name", "HRID", "Total Hours", "Weeks Assigned", "Week Details", "Avg Hours/Week"];
+    const ctHdrRow = ws3.getRow(3);
+    ctHdrRow.height = 28;
+    ctHeaders.forEach((h, ci) => {
+      const cell = ctHdrRow.getCell(ci + 1);
+      cell.value = h;
+      cell.font = { size: 11, bold: true, color: { argb: "FFFFFF" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: TEAL } };
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+    });
+
+    // Get unique connection team members
+    const connMembers = new Map<string, { name: string; hrid: string }>();
+    for (const ct of connectionTeam) {
+      if (!connMembers.has(ct.empName)) {
+        connMembers.set(ct.empName, { name: ct.empName, hrid: ct.empHrid });
+      }
+    }
+
+    let ctIdx = 0;
+    for (const [, member] of connMembers) {
+      const r = 4 + ctIdx;
+      const totalConnHrs = connHoursByEmp.get(member.name) || 0;
+      const weeks = connWeeksByEmp.get(member.name) || [];
+      const avgHrsPerWeek = weeks.length > 0 ? totalConnHrs / weeks.length : 0;
+      const fill = ctIdx % 2 === 0 ? "FFFFFF" : LIGHT_TEAL;
+
+      ws3.getCell(r, 1).value = ctIdx + 1;
+      ws3.getCell(r, 1).alignment = { horizontal: "center", vertical: "middle" };
+      ws3.getCell(r, 1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } };
+
+      ws3.getCell(r, 2).value = member.name;
+      ws3.getCell(r, 2).font = { bold: true, color: { argb: TEAL } };
+      ws3.getCell(r, 2).alignment = { horizontal: "left", vertical: "middle" };
+      ws3.getCell(r, 2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } };
+
+      ws3.getCell(r, 3).value = member.hrid;
+      ws3.getCell(r, 3).alignment = { horizontal: "center", vertical: "middle" };
+      ws3.getCell(r, 3).fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } };
+
+      ws3.getCell(r, 4).value = Math.round(totalConnHrs * 10) / 10;
+      ws3.getCell(r, 4).numFmt = "0.0";
+      ws3.getCell(r, 4).font = { bold: true, color: { argb: TEAL } };
+      ws3.getCell(r, 4).alignment = { horizontal: "center", vertical: "middle" };
+      ws3.getCell(r, 4).fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } };
+
+      ws3.getCell(r, 5).value = weeks.length;
+      ws3.getCell(r, 5).alignment = { horizontal: "center", vertical: "middle" };
+      ws3.getCell(r, 5).fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } };
+
+      ws3.getCell(r, 6).value = weeks.join("\n");
+      ws3.getCell(r, 6).font = { size: 9 };
+      ws3.getCell(r, 6).alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+      ws3.getCell(r, 6).fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } };
+
+      ws3.getCell(r, 7).value = Math.round(avgHrsPerWeek * 10) / 10;
+      ws3.getCell(r, 7).numFmt = "0.0";
+      ws3.getCell(r, 7).alignment = { horizontal: "center", vertical: "middle" };
+      ws3.getCell(r, 7).fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } };
+
+      // Add borders
+      for (let c = 1; c <= 7; c++) {
+        ws3.getCell(r, c).border = { top: { style: "thin", color: { argb: "E2E8F0" } }, left: { style: "thin", color: { argb: "E2E8F0" } }, bottom: { style: "thin", color: { argb: "E2E8F0" } }, right: { style: "thin", color: { argb: "E2E8F0" } } };
+      }
+      ws3.getRow(r).height = Math.max(22, weeks.length * 14);
+      ctIdx++;
+    }
+
+    if (connMembers.size === 0) {
+      const r = 4;
+      ws3.mergeCells(r, 1, r, 7);
+      ws3.getCell(r, 1).value = "No Connection Team assignments for this period.";
+      ws3.getCell(r, 1).font = { italic: true, color: { argb: N600 } };
+      ws3.getCell(r, 1).alignment = { horizontal: "center" };
+    }
+
+    // Connection Team totals
+    const totalConnHrsAll = Array.from(connHoursByEmp.values()).reduce((a, b) => a + b, 0);
+    const totalConnWeeks = connectionTeam.length;
+    const connTotalRow = 4 + connMembers.size + 1;
+    ws3.mergeCells(connTotalRow, 1, connTotalRow, 3);
+    ws3.getCell(connTotalRow, 1).value = "Total Connection Team";
+    ws3.getCell(connTotalRow, 1).font = { bold: true };
+    ws3.getCell(connTotalRow, 1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT_TEAL } };
+    ws3.getCell(connTotalRow, 4).value = Math.round(totalConnHrsAll * 10) / 10;
+    ws3.getCell(connTotalRow, 4).numFmt = "0.0";
+    ws3.getCell(connTotalRow, 4).font = { bold: true, color: { argb: TEAL } };
+    ws3.getCell(connTotalRow, 4).fill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT_TEAL } };
+    ws3.getCell(connTotalRow, 4).alignment = { horizontal: "center" };
+    ws3.getCell(connTotalRow, 5).value = totalConnWeeks;
+    ws3.getCell(connTotalRow, 5).font = { bold: true };
+    ws3.getCell(connTotalRow, 5).fill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT_TEAL } };
+    ws3.getCell(connTotalRow, 5).alignment = { horizontal: "center" };
+
+    // Weekly detail breakdown
+    const detailStartRow = connTotalRow + 2;
+    ws3.mergeCells(detailStartRow, 1, detailStartRow, 7);
+    ws3.getCell(detailStartRow, 1).value = "Weekly Breakdown";
+    ws3.getCell(detailStartRow, 1).font = { size: 13, bold: true, color: { argb: TEAL } };
+
+    const detailHeaders = ["Week Period", "Employee", "HRID", "Week Hours", ""];
+    const dhRow = ws3.getRow(detailStartRow + 1);
+    dhRow.height = 24;
+    ["Week Period", "Employee", "HRID", "Week Hours"].forEach((h, ci) => {
+      const cell = dhRow.getCell(ci + 1);
+      cell.value = h;
+      cell.font = { size: 10, bold: true, color: { argb: "FFFFFF" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: TEAL } };
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+    });
+
+    const sortedCT = [...connectionTeam].sort((a, b) => a.weekStart.localeCompare(b.weekStart));
+    sortedCT.forEach((ct, idx) => {
+      const r = detailStartRow + 2 + idx;
+      const hrs = calcConnWeekHours(ct.weekStart, ct.weekEnd);
+      const fill = idx % 2 === 0 ? "FFFFFF" : LIGHT_TEAL;
+      [`${ct.weekStart} >> ${ct.weekEnd}`, ct.empName, ct.empHrid, Math.round(hrs * 10) / 10].forEach((val, ci) => {
+        const cell = ws3.getCell(r, ci + 1);
+        cell.value = val;
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } };
+        cell.alignment = { horizontal: "center", vertical: "middle" };
+        cell.border = { top: { style: "thin", color: { argb: "E2E8F0" } }, left: { style: "thin", color: { argb: "E2E8F0" } }, bottom: { style: "thin", color: { argb: "E2E8F0" } }, right: { style: "thin", color: { argb: "E2E8F0" } } };
+        if (ci === 1) cell.font = { bold: true, color: { argb: TEAL } };
+        if (ci === 3) { cell.numFmt = "0.0"; cell.font = { bold: true }; }
+      });
+    });
+
+    // SHEET 4: CUMULATIVE BALANCE
+    const ws4 = wb.addWorksheet("Cumulative Balance", { properties: { tabColor: { argb: "D97706" } } });
+    [5, 24, 12, 14, 14, 14, 14, 14].forEach((w, i) => ws4.getColumn(i + 1).width = w);
+
+    ws4.mergeCells("A1:H1");
+    ws4.getCell("A1").value = "IT Helpdesk - Cumulative Balance (All Months)";
+    ws4.getCell("A1").font = { size: 16, bold: true, color: { argb: PRIMARY } };
+    ws4.getRow(1).height = 36;
+
+    let row4 = 3;
     const allMonths = genMonths.map((g) => g.monthKey);
     for (const monthKey of allMonths.sort()) {
       const [y, m] = monthKey.split("-");
@@ -420,19 +517,19 @@ export async function POST(request: NextRequest) {
       const mLocalStats = computeLocalStats(monthEntries, n);
       const mOffWeeks = computeOffWeeks(monthEntries, n);
 
-      ws3.mergeCells(row3, 1, row3, 8);
-      ws3.getCell(row3, 1).value = `${monthLabel} - Summary`;
-      ws3.getCell(row3, 1).font = { size: 13, bold: true, color: { argb: PRIMARY } };
-      row3++;
+      ws4.mergeCells(row4, 1, row4, 8);
+      ws4.getCell(row4, 1).value = `${monthLabel} - Summary`;
+      ws4.getCell(row4, 1).font = { size: 13, bold: true, color: { argb: PRIMARY } };
+      row4++;
 
       ["#", "Employee", "HRID", "Work Days", "Total Hours", "Weekends", "Sat Days", "OFF Weeks"].forEach((h, ci) => {
-        const cell = ws3.getCell(row3, ci + 1);
+        const cell = ws4.getCell(row4, ci + 1);
         cell.value = h;
         cell.font = { size: 11, bold: true, color: { argb: "FFFFFF" } };
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: PRIMARY } };
         cell.alignment = { horizontal: "center", vertical: "middle" };
       });
-      row3++;
+      row4++;
 
       const cumHrs: number[] = [];
       employees.forEach((emp, i) => {
@@ -441,7 +538,7 @@ export async function POST(request: NextRequest) {
         const offW = mOffWeeks[i] || 0;
         const fill = i % 2 === 0 ? "FFFFFF" : LIGHT_GRAY;
         [i + 1, emp.name, emp.hrid, mLocalStats[i]?.days || 0, Math.round(hrs * 10) / 10, mLocalStats[i]?.weekend || 0, mLocalStats[i]?.sat || 0, offW].forEach((val, ci) => {
-          const cell = ws3.getCell(row3, ci + 1);
+          const cell = ws4.getCell(row4, ci + 1);
           cell.value = val;
           cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } };
           cell.alignment = { horizontal: "center", vertical: "middle" };
@@ -449,128 +546,23 @@ export async function POST(request: NextRequest) {
           if (ci === 4) cell.numFmt = "0.0";
           if (ci === 7) cell.font = { color: { argb: RED } };
         });
-        row3++;
+        row4++;
       });
 
       const cVar = cumHrs.length > 0 ? Math.max(...cumHrs) - Math.min(...cumHrs) : 0;
       const cAvg = cumHrs.length > 0 ? cumHrs.reduce((a, b) => a + b, 0) / cumHrs.length : 0;
-      ws3.mergeCells(row3, 1, row3, 8);
-      ws3.getCell(row3, 1).value = `Variance: ${cVar.toFixed(1)}h | Avg: ${cAvg.toFixed(1)}h`;
-      ws3.getCell(row3, 1).font = { size: 10, color: { argb: N600 } };
+      ws4.mergeCells(row4, 1, row4, 8);
+      ws4.getCell(row4, 1).value = `Variance: ${cVar.toFixed(1)}h | Avg: ${cAvg.toFixed(1)}h`;
+      ws4.getCell(row4, 1).font = { size: 10, color: { argb: N600 } };
       for (let c = 1; c <= 8; c++) {
-        ws3.getCell(row3, c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT_BLUE } };
+        ws4.getCell(row4, c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT_BLUE } };
       }
-      row3 += 2;
-    }
-
-    // ===================== SHEET 4: CONNECTION TEAM (SEPARATE) =====================
-    if (connectionTeam.length > 0) {
-      const ws4 = wb.addWorksheet("Connection Team", { properties: { tabColor: { argb: TEAL } } });
-      [5, 24, 12, 14, 14, 14, 14, 16].forEach((w, i) => ws4.getColumn(i + 1).width = w);
-
-      ws4.mergeCells("A1:H1");
-      ws4.getCell("A1").value = `Connection Team Details (${period})${regionLabel}`;
-      ws4.getCell("A1").font = { size: 16, bold: true, color: { argb: TEAL } };
-      ws4.getRow(1).height = 36;
-
-      // Section 1: Summary by employee
-      ws4.mergeCells("A3:H3");
-      ws4.getCell("A3").value = "Employee Summary";
-      ws4.getCell("A3").font = { size: 13, bold: true, color: { argb: PRIMARY } };
-      ws4.getCell("A3").fill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT_TEAL } };
-
-      const connHeaders = ["#", "Employee Name", "HRID", "Total Weeks", "Total Hours", "Avg Hours/Week", "First Week", "Last Week"];
-      const cHeaderRow = ws4.getRow(5);
-      cHeaderRow.height = 28;
-      connHeaders.forEach((h, ci) => {
-        const cell = cHeaderRow.getCell(ci + 1);
-        cell.value = h;
-        cell.font = { size: 11, bold: true, color: { argb: "FFFFFF" } };
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: TEAL } };
-        cell.alignment = { horizontal: "center", vertical: "middle" };
-      });
-
-      // Aggregate by employee
-      const connEmpSummary = new Map<string, { name: string; hrid: string; weeks: { weekStart: string; weekEnd: string; hours: number }[] }>();
-      for (const ct of connectionTeam) {
-        const key = ct.empName;
-        if (!connEmpSummary.has(key)) {
-          connEmpSummary.set(key, { name: ct.empName, hrid: ct.empHrid, weeks: [] });
-        }
-        const hrs = calcConnWeekHours(ct.weekStart, ct.weekEnd);
-        connEmpSummary.get(key)!.weeks.push({ weekStart: ct.weekStart, weekEnd: ct.weekEnd, hours: hrs });
-      }
-
-      let connRow = 6;
-      let connIdx = 0;
-      for (const [_, summary] of connEmpSummary) {
-        const totalHrs = summary.weeks.reduce((s, w) => s + w.hours, 0);
-        const avgHrs = summary.weeks.length > 0 ? totalHrs / summary.weeks.length : 0;
-        const firstWeek = summary.weeks.sort((a, b) => a.weekStart.localeCompare(b.weekStart))[0];
-        const lastWeek = summary.weeks.sort((a, b) => b.weekStart.localeCompare(a.weekStart))[0];
-        const fill = connIdx % 2 === 0 ? "FFFFFF" : LIGHT_TEAL;
-
-        [connIdx + 1, summary.name, summary.hrid, summary.weeks.length, Math.round(totalHrs * 10) / 10, Math.round(avgHrs * 10) / 10, firstWeek.weekStart, lastWeek.weekStart].forEach((val, ci) => {
-          const cell = ws4.getCell(connRow, ci + 1);
-          cell.value = val;
-          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } };
-          cell.alignment = { horizontal: "center", vertical: "middle" };
-          cell.border = { top: { style: "thin", color: { argb: "E2E8F0" } }, left: { style: "thin", color: { argb: "E2E8F0" } }, bottom: { style: "thin", color: { argb: "E2E8F0" } }, right: { style: "thin", color: { argb: "E2E8F0" } } };
-          if (ci === 1) cell.alignment = { horizontal: "left", vertical: "middle" };
-          if (ci === 4 || ci === 5) cell.numFmt = "0.0";
-          if (ci === 4) cell.font = { color: { argb: TEAL }, bold: true };
-        });
-        connRow++;
-        connIdx++;
-      }
-
-      // Section 2: Detailed week-by-week breakdown
-      connRow += 2;
-      ws4.mergeCells(connRow, 1, connRow, 8);
-      ws4.getCell(connRow, 1).value = "Week-by-Week Details";
-      ws4.getCell(connRow, 1).font = { size: 13, bold: true, color: { argb: PRIMARY } };
-      ws4.getCell(connRow, 1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: LIGHT_TEAL } };
-      connRow++;
-
-      const detailHeaders = ["#", "Week Start", "Week End", "Employee Name", "HRID", "Hours", "Days", "Month"];
-      const dHeaderRow = ws4.getRow(connRow);
-      dHeaderRow.height = 28;
-      detailHeaders.forEach((h, ci) => {
-        const cell = dHeaderRow.getCell(ci + 1);
-        cell.value = h;
-        cell.font = { size: 11, bold: true, color: { argb: "FFFFFF" } };
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: TEAL } };
-        cell.alignment = { horizontal: "center", vertical: "middle" };
-      });
-      connRow++;
-
-      const sortedConnTeam = [...connectionTeam].sort((a, b) => a.weekStart.localeCompare(b.weekStart));
-      sortedConnTeam.forEach((ct, i) => {
-        const hrs = calcConnWeekHours(ct.weekStart, ct.weekEnd);
-        const start = new Date(ct.weekStart + "T00:00:00");
-        const end = new Date(ct.weekEnd + "T00:00:00");
-        const days = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-        const fill = i % 2 === 0 ? "FFFFFF" : LIGHT_TEAL;
-
-        [i + 1, ct.weekStart, ct.weekEnd, ct.empName, ct.empHrid, Math.round(hrs * 10) / 10, days, ct.monthKey].forEach((val, ci) => {
-          const cell = ws4.getCell(connRow, ci + 1);
-          cell.value = val;
-          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } };
-          cell.alignment = { horizontal: "center", vertical: "middle" };
-          cell.border = { top: { style: "thin", color: { argb: "E2E8F0" } }, left: { style: "thin", color: { argb: "E2E8F0" } }, bottom: { style: "thin", color: { argb: "E2E8F0" } }, right: { style: "thin", color: { argb: "E2E8F0" } } };
-          if (ci === 3) cell.alignment = { horizontal: "left", vertical: "middle" };
-          if (ci === 5) { cell.numFmt = "0.0"; cell.font = { color: { argb: TEAL }, bold: true }; }
-        });
-        connRow++;
-      });
-
-      ws4.views = [{ state: "frozen", ySplit: 5 }];
+      row4 += 2;
     }
 
     const buffer = await wb.xlsx.writeBuffer();
 
-    const regionSuffix = effectiveRegion && effectiveRegion !== "all" ? `_${effectiveRegion}` : "";
-
+    const regionSuffix = effectiveRegion !== "all" ? `_${effectiveRegion}` : "";
     return new NextResponse(buffer, {
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -4,7 +4,7 @@ import { generateScheduleForMonth, generateScheduleForWeek, computeLocalStats, c
 import type { Employee, Settings, ScheduleEntry, CumulativeStats } from "@/lib/scheduler";
 import { db } from "@/lib/db";
 
-// GET: Fetch schedule entries (filtered by month and region using DB column)
+// GET: Fetch schedule entries filtered by month and region
 export async function GET(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
@@ -20,9 +20,9 @@ export async function GET(request: NextRequest) {
       effectiveRegion = auth.region;
     }
 
+    // Build WHERE clause — filter by region column directly for bulletproof isolation
     const whereClause: Record<string, unknown> = {};
     if (month) whereClause.date = { startsWith: month };
-    // Use DB region column for strict isolation
     if (effectiveRegion && effectiveRegion !== "all") {
       whereClause.region = effectiveRegion;
     }
@@ -63,7 +63,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST: Generate schedule with strict region isolation
+// POST: Generate schedule — fully region-isolated
 export async function POST(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
@@ -77,9 +77,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Mode is required (week or month)" }, { status: 400 });
     }
 
-    // Determine effective region for this generation
+    // Determine effective region
     let effectiveRegion = region || "all";
-    if (effectiveRegion === "all" && auth.region && auth.region !== "all") {
+    if (auth.region && auth.region !== "all") {
       effectiveRegion = auth.region;
     }
 
@@ -87,10 +87,13 @@ export async function POST(request: NextRequest) {
     const dbEmployees = await db.employee.findMany({ orderBy: { order: "asc" } });
     const dbSettings = await db.settings.findUnique();
 
-    // STRICT region filtering: only exact region match
+    // STRICT region filter — employees must match the selected region exactly
     let regionDbEmployees = dbEmployees;
-    if (effectiveRegion && effectiveRegion !== "all") {
+    if (effectiveRegion !== "all") {
       regionDbEmployees = dbEmployees.filter((e) => e.region === effectiveRegion);
+      if (regionDbEmployees.length === 0) {
+        return NextResponse.json({ error: `No employees found for region: ${effectiveRegion}. Please assign employees to this region first.` }, { status: 400 });
+      }
     }
 
     const employees: Employee[] = regionDbEmployees.map((e) => ({
@@ -119,20 +122,19 @@ export async function POST(request: NextRequest) {
     const nameToRegionIdx = new Map<string, number>();
     activeEmployees.forEach((e, i) => nameToRegionIdx.set(e.name, i));
 
-    // Fetch ONLY entries for THIS region (strict isolation)
-    const regionWhere: Record<string, unknown> = {};
-    if (effectiveRegion && effectiveRegion !== "all") {
-      regionWhere.region = effectiveRegion;
+    // Fetch ONLY this region's existing entries for cumulative stats — fully isolated
+    const regionWhereClause: Record<string, unknown> = {};
+    if (effectiveRegion !== "all") {
+      regionWhereClause.region = effectiveRegion;
     }
-
-    const [existingRegionEntries, genMonths] = await Promise.all([
-      db.scheduleEntry.findMany({ where: regionWhere, orderBy: { date: "asc" } }),
+    const [existingDbEntries, genMonths] = await Promise.all([
+      db.scheduleEntry.findMany({ where: regionWhereClause, orderBy: { date: "asc" } }),
       db.generatedMonth.findMany({ orderBy: { monthKey: "asc" } }),
     ]);
     const existingGenMonths = genMonths.map((g) => g.monthKey);
 
     // Helper: convert DB entry to ScheduleEntry
-    const toEntry = (e: typeof existingRegionEntries[0]): ScheduleEntry => ({
+    const toEntry = (e: typeof existingDbEntries[0]): ScheduleEntry => ({
       date: e.date, dayName: e.dayName, dayType: e.dayType,
       empIdx: e.empIdx, empName: e.empName, empHrid: e.empHrid,
       start: e.start, end: e.end, hours: e.hours,
@@ -181,7 +183,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Compute cumulative stats from ONLY this region's existing entries
-    const allConverted = convertEntries(existingRegionEntries.map(toEntry));
+    const allConverted = convertEntries(existingDbEntries.map(toEntry));
     const tempCumStats = computeCumStats(allConverted);
 
     let newEntries: ScheduleEntry[] = [];
@@ -192,18 +194,19 @@ export async function POST(request: NextRequest) {
       }
 
       const monthKey = `${year}-${String(month).padStart(2, "0")}`;
-      const regionEmpNames = new Set(activeEmployees.map((e) => e.name));
 
-      // Delete existing non-manual entries for this month + region
-      const toDeleteIds = existingRegionEntries
-        .filter((e) => e.date.startsWith(monthKey) && !e.isManual)
-        .map((e) => e.id);
-      if (toDeleteIds.length > 0) {
-        await db.scheduleEntry.deleteByIds(toDeleteIds);
+      // Delete existing non-manual entries for this month + region using DB region column
+      const deleteWhere: Record<string, unknown> = {
+        date: { startsWith: monthKey },
+        isManual: false,
+      };
+      if (effectiveRegion !== "all") {
+        deleteWhere.region = effectiveRegion;
       }
+      await db.scheduleEntry.deleteMany({ where: deleteWhere });
 
-      // Compute remaining stats (only this region's entries, excluding current month)
-      const remainingEntries = existingRegionEntries
+      // Compute remaining stats WITHOUT re-fetching from DB
+      const remainingEntries = existingDbEntries
         .filter((e) => !(e.date.startsWith(monthKey) && !e.isManual))
         .map(toEntry);
       const cleanCumStats = computeCumStats(convertEntries(remainingEntries));
@@ -211,7 +214,7 @@ export async function POST(request: NextRequest) {
       const result = generateScheduleForMonth(year, month, activeEmployees, settings, cleanCumStats, convertEntries(remainingEntries));
       newEntries = result.entries;
 
-      // Insert new entries with region tag (batch)
+      // Insert new entries into store with region tag
       await db.scheduleEntry.createMany({
         data: newEntries.map((entry) => ({
           date: entry.date,
@@ -256,16 +259,17 @@ export async function POST(request: NextRequest) {
       const newDates = new Set(newEntries.map((e) => e.date));
       const newMonthKeys = new Set(newEntries.map((e) => e.date.substring(0, 7)));
 
-      // Delete overlapping entries for this region only
-      const overlappingEntries = existingRegionEntries.filter((entry) => 
-        newDates.has(entry.date) && !entry.isManual
-      );
-      const toDeleteIds = overlappingEntries.map((entry) => entry.id);
-      if (toDeleteIds.length > 0) {
-        await db.scheduleEntry.deleteByIds(toDeleteIds);
+      // Delete overlapping entries using DB region column
+      const overlapDeleteWhere: Record<string, unknown> = {
+        date: { in: Array.from(newDates) },
+        isManual: false,
+      };
+      if (effectiveRegion !== "all") {
+        overlapDeleteWhere.region = effectiveRegion;
       }
+      await db.scheduleEntry.deleteMany({ where: overlapDeleteWhere });
 
-      // Insert new entries with region tag (batch)
+      // Insert new entries with region tag
       await db.scheduleEntry.createMany({
         data: newEntries.map((entry) => ({
           date: entry.date,
@@ -309,7 +313,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// DELETE: Clear schedule entries for a month (ADMIN/EDITOR only)
+// DELETE: Clear schedule entries for a month (respects region)
 export async function DELETE(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
@@ -324,26 +328,27 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: "month parameter is required" }, { status: 400 });
     }
 
-    // If region specified, only delete entries for that region
-    let effectiveRegion = region;
-    if (!effectiveRegion && auth.region && auth.region !== "all") {
-      effectiveRegion = auth.region;
+    // Determine effective region for deletion
+    let deleteRegion = region || "";
+    if (!deleteRegion && auth.region && auth.region !== "all") {
+      deleteRegion = auth.region;
     }
 
-    if (effectiveRegion && effectiveRegion !== "all") {
-      // Delete only entries matching this region
+    // ALWAYS delete by region — strict isolation
+    if (deleteRegion && deleteRegion !== "all") {
       const entries = await db.scheduleEntry.findMany({
-        where: { date: { startsWith: month }, region: effectiveRegion },
+        where: { date: { startsWith: month }, region: deleteRegion },
       });
       const ids = entries.map((e) => e.id);
       if (ids.length > 0) {
         await db.scheduleEntry.deleteByIds(ids);
       }
       return NextResponse.json({ success: true, deleted: ids.length });
-    } else {
-      const deleted = await db.scheduleEntry.deleteByMonth(month);
-      return NextResponse.json({ success: true, deleted: deleted.count });
     }
+
+    // Admin with region=all can clear all regions
+    const deleted = await db.scheduleEntry.deleteByMonth(month);
+    return NextResponse.json({ success: true, deleted: deleted.count });
   } catch (error) {
     console.error("Error clearing schedule:", error);
     return NextResponse.json({ error: "Failed to clear schedule" }, { status: 500 });

@@ -12,9 +12,9 @@ export async function GET(request: NextRequest) {
       orderBy: { order: "asc" },
     });
 
-    // Non-admin users with a specific region only see their region's employees
+    // Non-admin users with a specific region only see their region's employees (STRICT)
     if (auth.role !== "admin" && auth.region && auth.region !== "all") {
-      const filtered = allEmployees.filter((e) => e.region === auth.region || e.region === "all");
+      const filtered = allEmployees.filter((e) => e.region === auth.region);
       return NextResponse.json({ employees: filtered });
     }
 

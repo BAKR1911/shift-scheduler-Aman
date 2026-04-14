@@ -10,7 +10,13 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { date, empIdx, empName, empHrid, dayName, dayType, start, end, hours, weekNum } = body;
+    const { date, empIdx, empName, empHrid, dayName, dayType, start, end, hours, weekNum, region } = body;
+
+    // Determine effective region
+    let effectiveRegion = region || "all";
+    if (auth.region && auth.region !== "all") {
+      effectiveRegion = auth.region;
+    }
 
     if (!date || empIdx === undefined || !empName) {
       return NextResponse.json({ error: "date, empIdx, and empName are required" }, { status: 400 });
@@ -40,6 +46,7 @@ export async function POST(request: NextRequest) {
         isHoliday: 0,
         isManual: 1,
         monthKey: date.substring(0, 7),
+        region: effectiveRegion,
       },
     });
 

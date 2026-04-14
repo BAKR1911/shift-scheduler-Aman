@@ -207,6 +207,7 @@ async function initSchema() {
       emp_name TEXT NOT NULL DEFAULT '',
       emp_hrid TEXT NOT NULL DEFAULT '',
       month_key TEXT NOT NULL DEFAULT '',
+      region TEXT NOT NULL DEFAULT 'all',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
@@ -245,18 +246,44 @@ async function initSchema() {
     try { await client.execute("ALTER TABLE settings ADD COLUMN day_hours TEXT NOT NULL DEFAULT '{}'"); } catch { /* ignore */ }
   }
 
-  // Migration: add region column to schedule_entries for strict data isolation
+  // Migration: add region column to schedule_entries if it doesn't exist
   try {
     await client.execute("SELECT region FROM schedule_entries LIMIT 0");
   } catch {
     try { await client.execute("ALTER TABLE schedule_entries ADD COLUMN region TEXT NOT NULL DEFAULT 'all'"); } catch { /* ignore */ }
+    // Backfill region from employees
+    try {
+      const allEmps = await client.execute("SELECT name, region FROM employees");
+      const empRegionMap: Record<string, string> = {};
+      for (const r of allEmps.rows) {
+        empRegionMap[String(r.name)] = String(r.region);
+      }
+      const allEntries = await client.execute("SELECT id, emp_name FROM schedule_entries WHERE region = 'all'");
+      for (const entry of allEntries.rows) {
+        const empName = String(entry.emp_name);
+        const empRegion = empRegionMap[empName];
+        if (empRegion && empRegion !== "all") {
+          await client.execute({ sql: "UPDATE schedule_entries SET region = ? WHERE id = ?", args: [empRegion, entry.id] });
+        }
+      }
+      console.log("[DB] Backfilled region for schedule_entries");
+    } catch (e) {
+      console.log("[DB] Region backfill skipped:", e);
+    }
   }
 
-  // Migration: add region column to connection_team
+  // Migration: add region column to connection_team if it doesn't exist
   try {
     await client.execute("SELECT region FROM connection_team LIMIT 0");
   } catch {
     try { await client.execute("ALTER TABLE connection_team ADD COLUMN region TEXT NOT NULL DEFAULT 'all'"); } catch { /* ignore */ }
+  }
+
+  // Migration: add region column to region_rotation if it doesn't exist
+  try {
+    await client.execute("SELECT region FROM region_rotation LIMIT 0");
+  } catch {
+    try { await client.execute("ALTER TABLE region_rotation ADD COLUMN region TEXT NOT NULL DEFAULT ''"); } catch { /* ignore */ }
   }
 
   // Seed default admin if no users exist
@@ -750,6 +777,7 @@ export const db = {
       return {
         ...args.data,
         id: Number(result.lastInsertRowid),
+        region: args.data.region || "all",
         createdAt: now,
       };
     },
@@ -1017,6 +1045,7 @@ export const db = {
       return {
         ...args.data,
         id: Number(result.lastInsertRowid),
+        region: args.data.region || "all",
         createdAt: now,
       };
     },

@@ -4,7 +4,7 @@ import { computeLocalStats, computeOffWeeks } from "@/lib/scheduler";
 import type { ScheduleEntry } from "@/lib/scheduler";
 import { db } from "@/lib/db";
 
-// GET: Get stats/report data (region-isolated)
+// GET: Get stats/report data (in-memory store backed)
 export async function GET(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
@@ -12,22 +12,22 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const month = searchParams.get("month") || "";
-    const regionParam = searchParams.get("region") || "";
+    const region = searchParams.get("region") || "";
 
-    // Determine effective region for filtering
-    let effectiveRegion = regionParam;
+    // Determine effective region for reports
+    let effectiveRegion = region;
     if (!effectiveRegion && auth.region && auth.region !== "all") {
       effectiveRegion = auth.region;
     }
 
-    // Fetch employees (strict region match)
-    let dbEmployees = await db.employee.findMany({ orderBy: { order: "asc" } });
+    // Fetch employees — STRICT region filter
+    const dbEmployees = await db.employee.findMany({ orderBy: { order: "asc" } });
+    let employees = dbEmployees.filter((e) => e.active);
     if (effectiveRegion && effectiveRegion !== "all") {
-      dbEmployees = dbEmployees.filter((e) => e.region === effectiveRegion);
+      employees = employees.filter((e) => e.region === effectiveRegion);
     }
-    const employees = dbEmployees.filter((e) => e.active);
 
-    // Fetch entries using DB region column for strict isolation
+    // Fetch entries — STRICT region filter
     const whereClause: Record<string, unknown> = {};
     if (month) whereClause.date = { startsWith: month };
     if (effectiveRegion && effectiveRegion !== "all") {
