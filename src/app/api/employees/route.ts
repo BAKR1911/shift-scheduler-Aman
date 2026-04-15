@@ -12,9 +12,9 @@ export async function GET(request: NextRequest) {
       orderBy: { order: "asc" },
     });
 
-    // Non-admin users with a specific region only see their region's employees
+    // Non-admin users with a specific region only see their region's employees (STRICT)
     if (auth.role !== "admin" && auth.region && auth.region !== "all") {
-      const filtered = allEmployees.filter((e) => e.region === auth.region || e.region === "all");
+      const filtered = allEmployees.filter((e) => e.region === auth.region);
       return NextResponse.json({ employees: filtered });
     }
 
@@ -33,7 +33,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { name, hrid, active, region } = body;
+    const { name, hrid, active, region, teamType } = body;
 
     if (!name || !hrid) {
       return NextResponse.json({ error: "Name and HRID are required" }, { status: 400 });
@@ -50,6 +50,7 @@ export async function POST(request: NextRequest) {
         hrid: hrid.trim(),
         active: active !== false ? 1 : 0,
         region: region || "all",
+        teamType: teamType || "",
         order,
       },
     });
@@ -69,7 +70,7 @@ export async function PUT(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { id, name, hrid, active, order, region } = body;
+    const { id, name, hrid, active, order, region, teamType } = body;
 
     if (!id) {
       return NextResponse.json({ error: "Employee ID is required" }, { status: 400 });
@@ -83,6 +84,7 @@ export async function PUT(request: NextRequest) {
         ...(active !== undefined && { active: active ? 1 : 0 }),
         ...(order !== undefined && { order }),
         ...(region !== undefined && { region }),
+        ...(teamType !== undefined && { teamType }),
       },
     });
 

@@ -10,16 +10,26 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { date, empIdx, empName, empHrid, dayName, dayType, start, end, hours, weekNum } = body;
+    const { date, empIdx, empName, empHrid, dayName, dayType, start, end, hours, weekNum, region } = body;
+
+    // Determine effective region
+    let effectiveRegion = region || "all";
+    if (auth.region && auth.region !== "all") {
+      effectiveRegion = auth.region;
+    }
 
     if (!date || empIdx === undefined || !empName) {
       return NextResponse.json({ error: "date, empIdx, and empName are required" }, { status: 400 });
     }
 
-    // Check if entry already exists
-    const existing = await db.scheduleEntry.findFirst({ where: { date } });
+    // Check if entry already exists for this region
+    const existWhere: Record<string, unknown> = { date };
+    if (effectiveRegion && effectiveRegion !== "all") {
+      existWhere.region = effectiveRegion;
+    }
+    const existing = await db.scheduleEntry.findFirst({ where: existWhere });
     if (existing) {
-      return NextResponse.json({ error: "An entry already exists for this date" }, { status: 400 });
+      return NextResponse.json({ error: `An entry already exists for this date${effectiveRegion && effectiveRegion !== "all" ? ` in ${effectiveRegion}` : ""}` }, { status: 400 });
     }
 
     const entry = await db.scheduleEntry.create({
@@ -40,6 +50,7 @@ export async function POST(request: NextRequest) {
         isHoliday: 0,
         isManual: 1,
         monthKey: date.substring(0, 7),
+        region: effectiveRegion,
       },
     });
 

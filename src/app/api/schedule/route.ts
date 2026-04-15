@@ -4,7 +4,7 @@ import { generateScheduleForMonth, generateScheduleForWeek, computeLocalStats, c
 import type { Employee, Settings, ScheduleEntry, CumulativeStats } from "@/lib/scheduler";
 import { db } from "@/lib/db";
 
-// GET: Fetch schedule entries (optionally filtered by month and region)
+// GET: Fetch schedule entries filtered by month and region
 export async function GET(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
@@ -14,23 +14,31 @@ export async function GET(request: NextRequest) {
     const month = searchParams.get("month") || "";
     const region = searchParams.get("region") || "";
 
-    const whereClause: Record<string, unknown> = {};
-    if (month) whereClause.date = { startsWith: month };
-
-    const dbEntries = await db.scheduleEntry.findMany({
-      where: whereClause,
-      orderBy: { date: "asc" },
-    });
-
-    const genMonths = await db.generatedMonth.findMany({ orderBy: { monthKey: "asc" } });
-
     // Determine effective region filter
     let effectiveRegion = region;
     if (!effectiveRegion && auth.region && auth.region !== "all") {
       effectiveRegion = auth.region;
     }
 
-    let filteredEntries = dbEntries.map((e) => ({
+    // Build WHERE clause — filter by region column directly for bulletproof isolation
+    const whereClause: Record<string, unknown> = {};
+    if (month) whereClause.date = { startsWith: month };
+    if (effectiveRegion && effectiveRegion !== "all") {
+      whereClause.region = effectiveRegion;
+    }
+
+    const dbEntries = await db.scheduleEntry.findMany({
+      where: whereClause,
+      orderBy: { date: "asc" },
+    });
+
+    const genMonthsWhere: Record<string, unknown> = {};
+    if (effectiveRegion && effectiveRegion !== "all") {
+      genMonthsWhere.region = effectiveRegion;
+    }
+    const genMonths = await db.generatedMonth.findMany({ where: genMonthsWhere, orderBy: { monthKey: "asc" } });
+
+    const filteredEntries = dbEntries.map((e) => ({
       date: e.date,
       dayName: e.dayName,
       dayType: e.dayType,
@@ -46,14 +54,8 @@ export async function GET(request: NextRequest) {
       weekNum: e.weekNum,
       isHoliday: e.isHoliday,
       isManual: e.isManual,
+      region: e.region,
     }));
-
-    // Auto-filter entries for non-admin users or when a specific region is requested
-    if (effectiveRegion && effectiveRegion !== "all") {
-      const allDbEmployees = await db.employee.findMany({ orderBy: { order: "asc" } });
-      const regionEmpNames = new Set(allDbEmployees.filter((e) => e.region === effectiveRegion || e.region === "all").map((e) => e.name));
-      filteredEntries = filteredEntries.filter((e) => regionEmpNames.has(e.empName));
-    }
 
     return NextResponse.json({
       entries: filteredEntries,
@@ -65,7 +67,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST: Generate schedule (in-memory store backed)
+// POST: Generate schedule — fully region-isolated
 export async function POST(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
@@ -79,14 +81,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Mode is required (week or month)" }, { status: 400 });
     }
 
+    // Determine effective region
+    let effectiveRegion = region || "all";
+    if (auth.region && auth.region !== "all") {
+      effectiveRegion = auth.region;
+    }
+
     // Fetch employees and settings from store
     const dbEmployees = await db.employee.findMany({ orderBy: { order: "asc" } });
     const dbSettings = await db.settings.findUnique();
 
-    // Filter employees by region if specified
+    // STRICT region filter — employees must match the selected region exactly
     let regionDbEmployees = dbEmployees;
-    if (region && region !== "all") {
-      regionDbEmployees = dbEmployees.filter((e) => e.region === region);
+    if (effectiveRegion !== "all") {
+      regionDbEmployees = dbEmployees.filter((e) => e.region === effectiveRegion);
+      if (regionDbEmployees.length === 0) {
+        return NextResponse.json({ error: `No employees found for region: ${effectiveRegion}. Please assign employees to this region first.` }, { status: 400 });
+      }
     }
 
     const employees: Employee[] = regionDbEmployees.map((e) => ({
@@ -108,17 +119,25 @@ export async function POST(request: NextRequest) {
     const activeEmployees = employees.filter((e) => e.active);
 
     if (activeEmployees.length < 2) {
-      return NextResponse.json({ error: "Need at least 2 active employees" }, { status: 400 });
+      return NextResponse.json({ error: "Need at least 2 active employees in this region" }, { status: 400 });
     }
 
     // Build name-to-index map for the region's active employees
     const nameToRegionIdx = new Map<string, number>();
     activeEmployees.forEach((e, i) => nameToRegionIdx.set(e.name, i));
 
-    // Fetch existing entries and generated months in parallel
+    // Fetch ONLY this region's existing entries for cumulative stats — fully isolated
+    const regionWhereClause: Record<string, unknown> = {};
+    if (effectiveRegion !== "all") {
+      regionWhereClause.region = effectiveRegion;
+    }
+    const genMonthsWhere: Record<string, unknown> = {};
+    if (effectiveRegion !== "all") {
+      genMonthsWhere.region = effectiveRegion;
+    }
     const [existingDbEntries, genMonths] = await Promise.all([
-      db.scheduleEntry.findMany({ orderBy: { date: "asc" } }),
-      db.generatedMonth.findMany({ orderBy: { monthKey: "asc" } }),
+      db.scheduleEntry.findMany({ where: regionWhereClause, orderBy: { date: "asc" } }),
+      db.generatedMonth.findMany({ where: genMonthsWhere, orderBy: { monthKey: "asc" } }),
     ]);
     const existingGenMonths = genMonths.map((g) => g.monthKey);
 
@@ -131,7 +150,7 @@ export async function POST(request: NextRequest) {
       weekNum: e.weekNum, isHoliday: Boolean(e.isHoliday), isManual: Boolean(e.isManual),
     });
 
-    // Helper: compute cumulative stats from entries (name-based)
+    // Helper: compute cumulative stats from entries (name-based, region-scoped)
     function computeCumStats(entries: ScheduleEntry[]): Record<number, CumulativeStats> {
       const stats: Record<number, CumulativeStats> = {};
       for (let i = 0; i < activeEmployees.length; i++) {
@@ -171,7 +190,7 @@ export async function POST(request: NextRequest) {
       }));
     }
 
-    // Compute cumulative stats from ALL existing entries
+    // Compute cumulative stats from ONLY this region's existing entries
     const allConverted = convertEntries(existingDbEntries.map(toEntry));
     const tempCumStats = computeCumStats(allConverted);
 
@@ -183,38 +202,27 @@ export async function POST(request: NextRequest) {
       }
 
       const monthKey = `${year}-${String(month).padStart(2, "0")}`;
-      const regionEmpNames = new Set(activeEmployees.map((e) => e.name));
 
-      // Delete existing non-manual entries for this month + region
-      if (region && region !== "all") {
-        // Collect IDs to delete (avoid extra DB fetch)
-        const toDelete = existingDbEntries.filter(
-          (e) => e.date.startsWith(monthKey) && !e.isManual && regionEmpNames.has(e.empName)
-        );
-        for (const entry of toDelete) {
-          await db.scheduleEntry.delete({ where: { id: entry.id } });
-        }
-      } else {
-        await db.scheduleEntry.deleteMany({
-          where: { date: { startsWith: monthKey }, isManual: false },
-        });
+      // Delete existing non-manual entries for this month + region using DB region column
+      const deleteWhere: Record<string, unknown> = {
+        date: { startsWith: monthKey },
+        isManual: false,
+      };
+      if (effectiveRegion !== "all") {
+        deleteWhere.region = effectiveRegion;
       }
+      await db.scheduleEntry.deleteMany({ where: deleteWhere });
 
       // Compute remaining stats WITHOUT re-fetching from DB
       const remainingEntries = existingDbEntries
-        .filter((e) => {
-          if (region && region !== "all") {
-            return !(e.date.startsWith(monthKey) && !e.isManual && regionEmpNames.has(e.empName));
-          }
-          return !(e.date.startsWith(monthKey) && !e.isManual);
-        })
+        .filter((e) => !(e.date.startsWith(monthKey) && !e.isManual))
         .map(toEntry);
       const cleanCumStats = computeCumStats(convertEntries(remainingEntries));
 
       const result = generateScheduleForMonth(year, month, activeEmployees, settings, cleanCumStats, convertEntries(remainingEntries));
       newEntries = result.entries;
 
-      // Insert new entries into store (batch)
+      // Insert new entries into store with region tag
       await db.scheduleEntry.createMany({
         data: newEntries.map((entry) => ({
           date: entry.date,
@@ -233,17 +241,19 @@ export async function POST(request: NextRequest) {
           isHoliday: entry.isHoliday ? 1 : 0,
           isManual: 0,
           monthKey,
+          region: effectiveRegion,
         })),
       });
 
       // Record generated month
       if (!existingGenMonths.includes(monthKey)) {
-        await db.generatedMonth.create({ data: { monthKey } });
+        await db.generatedMonth.create({ data: { monthKey, region: effectiveRegion } });
       }
 
       return NextResponse.json({
         generated: newEntries.length,
         monthKey,
+        region: effectiveRegion,
       });
 
     } else if (mode === "week") {
@@ -257,27 +267,17 @@ export async function POST(request: NextRequest) {
       const newDates = new Set(newEntries.map((e) => e.date));
       const newMonthKeys = new Set(newEntries.map((e) => e.date.substring(0, 7)));
 
-      // Delete overlapping entries — if region is specified, only delete for that region's employees
-      if (region && region !== "all") {
-        const regionEmpNames = new Set(activeEmployees.map((e) => e.name));
-        const overlappingEntries = await db.scheduleEntry.findMany({
-          where: { date: { in: Array.from(newDates) } },
-        });
-        for (const entry of overlappingEntries) {
-          if (!entry.isManual && regionEmpNames.has(entry.empName)) {
-            await db.scheduleEntry.delete({ where: { id: entry.id } });
-          }
-        }
-      } else {
-        await db.scheduleEntry.deleteMany({
-          where: {
-            date: { in: Array.from(newDates) },
-            isManual: false,
-          },
-        });
+      // Delete overlapping entries using DB region column
+      const overlapDeleteWhere: Record<string, unknown> = {
+        date: { in: Array.from(newDates) },
+        isManual: false,
+      };
+      if (effectiveRegion !== "all") {
+        overlapDeleteWhere.region = effectiveRegion;
       }
+      await db.scheduleEntry.deleteMany({ where: overlapDeleteWhere });
 
-      // Insert new entries (batch)
+      // Insert new entries with region tag
       await db.scheduleEntry.createMany({
         data: newEntries.map((entry) => ({
           date: entry.date,
@@ -296,18 +296,20 @@ export async function POST(request: NextRequest) {
           isHoliday: entry.isHoliday ? 1 : 0,
           isManual: 0,
           monthKey: entry.date.substring(0, 7),
+          region: effectiveRegion,
         })),
       });
 
       // Record generated months
       for (const mk of newMonthKeys) {
         if (!existingGenMonths.includes(mk)) {
-          await db.generatedMonth.create({ data: { monthKey: mk } });
+          await db.generatedMonth.create({ data: { monthKey: mk, region: effectiveRegion } });
         }
       }
 
       return NextResponse.json({
         generated: newEntries.length,
+        region: effectiveRegion,
       });
     } else {
       return NextResponse.json({ error: "Invalid mode" }, { status: 400 });
@@ -319,7 +321,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// DELETE: Clear all schedule entries for a month (ADMIN/EDITOR only)
+// DELETE: Clear schedule entries for a month (respects region)
 export async function DELETE(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
@@ -328,12 +330,34 @@ export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const month = searchParams.get("month") || "";
+    const region = searchParams.get("region") || "";
 
     if (!month) {
       return NextResponse.json({ error: "month parameter is required" }, { status: 400 });
     }
 
+    // Determine effective region for deletion
+    let deleteRegion = region || "";
+    if (!deleteRegion && auth.region && auth.region !== "all") {
+      deleteRegion = auth.region;
+    }
+
+    // ALWAYS delete by region — strict isolation
+    if (deleteRegion && deleteRegion !== "all") {
+      const entries = await db.scheduleEntry.findMany({
+        where: { date: { startsWith: month }, region: deleteRegion },
+      });
+      const ids = entries.map((e) => e.id);
+      if (ids.length > 0) {
+        await db.scheduleEntry.deleteByIds(ids);
+      }
+      await db.generatedMonth.deleteByMonthAndRegion(month, deleteRegion);
+      return NextResponse.json({ success: true, deleted: ids.length });
+    }
+
+    // Admin with region=all can clear all regions
     const deleted = await db.scheduleEntry.deleteByMonth(month);
+    await db.generatedMonth.deleteByMonth(month);
     return NextResponse.json({ success: true, deleted: deleted.count });
   } catch (error) {
     console.error("Error clearing schedule:", error);

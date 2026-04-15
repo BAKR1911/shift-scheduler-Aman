@@ -12,35 +12,32 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const month = searchParams.get("month") || "";
-    const regionParam = searchParams.get("region") || "";
+    const region = searchParams.get("region") || "";
 
-    // Determine effective region for filtering
-    let effectiveRegion = regionParam;
+    // Determine effective region for reports
+    let effectiveRegion = region;
     if (!effectiveRegion && auth.region && auth.region !== "all") {
       effectiveRegion = auth.region;
     }
 
-    // Fetch employees (filter by region for non-admin users)
-    let dbEmployees = await db.employee.findMany({ orderBy: { order: "asc" } });
+    // Fetch employees — STRICT region filter
+    const dbEmployees = await db.employee.findMany({ orderBy: { order: "asc" } });
+    let employees = dbEmployees.filter((e) => e.active);
     if (effectiveRegion && effectiveRegion !== "all") {
-      dbEmployees = dbEmployees.filter((e) => e.region === effectiveRegion || e.region === "all");
+      employees = employees.filter((e) => e.region === effectiveRegion);
     }
-    const employees = dbEmployees.filter((e) => e.active);
 
-    // Fetch entries
+    // Fetch entries — STRICT region filter
     const whereClause: Record<string, unknown> = {};
     if (month) whereClause.date = { startsWith: month };
+    if (effectiveRegion && effectiveRegion !== "all") {
+      whereClause.region = effectiveRegion;
+    }
 
-    let dbEntries = await db.scheduleEntry.findMany({
+    const dbEntries = await db.scheduleEntry.findMany({
       where: whereClause,
       orderBy: { date: "asc" },
     });
-
-    // Filter entries by region if needed
-    if (effectiveRegion && effectiveRegion !== "all") {
-      const regionEmpNames = new Set(dbEmployees.map((e) => e.name));
-      dbEntries = dbEntries.filter((e) => regionEmpNames.has(e.empName));
-    }
 
     const entries: ScheduleEntry[] = dbEntries.map((e) => ({
       date: e.date,

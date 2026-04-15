@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, unauthorizedResponse, forbiddenResponse } from "@/lib/auth";
 import { db } from "@/lib/db";
 
-// GET: List connection team entries
+// GET: List connection team entries (region-filtered)
 export async function GET(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
@@ -10,9 +10,20 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const monthKey = searchParams.get("month") || "";
+    const region = searchParams.get("region") || "";
+
+    // Determine effective region
+    let effectiveRegion = region;
+    if (!effectiveRegion && auth.region && auth.region !== "all") {
+      effectiveRegion = auth.region;
+    }
+
+    const where: { monthKey?: string; region?: string } = {};
+    if (monthKey) where.monthKey = monthKey;
+    if (effectiveRegion && effectiveRegion !== "all") where.region = effectiveRegion;
 
     const entries = await db.connectionTeam.findMany(
-      monthKey ? { where: { monthKey } } : undefined
+      Object.keys(where).length > 0 ? { where } : undefined
     );
 
     return NextResponse.json({ entries });
@@ -22,7 +33,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST: Create connection team entry (admin/editor only)
+// POST: Create connection team entry (admin/editor only) — with region
 export async function POST(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
@@ -30,10 +41,16 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { weekStart, weekEnd, empIdx, empName, empHrid, monthKey } = body;
+    const { weekStart, weekEnd, empIdx, empName, empHrid, monthKey, region } = body;
 
     if (!weekStart || !weekEnd || empName === undefined) {
       return NextResponse.json({ error: "weekStart, weekEnd, and empName are required" }, { status: 400 });
+    }
+
+    // Determine effective region
+    let effectiveRegion = region || "all";
+    if (auth.region && auth.region !== "all") {
+      effectiveRegion = auth.region;
     }
 
     const entry = await db.connectionTeam.create({
@@ -44,6 +61,7 @@ export async function POST(request: NextRequest) {
         empName: empName || "",
         empHrid: empHrid || "",
         monthKey: monthKey || "",
+        region: effectiveRegion,
       },
     });
 

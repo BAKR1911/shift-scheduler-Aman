@@ -21,7 +21,7 @@ import {
   CalendarDays, Clock, Sun, Moon, X, ArrowLeftRight, AlertTriangle,
   CheckCircle, Info, ChevronDown, ChevronUp, FileSpreadsheet, BarChart3,
   Sparkles, Eye, EyeOff, LogOut, User, Shield, KeyRound, Lock, HeadphonesIcon,
-  Pencil, Download, UserCog, Link2, MapPin, RotateCcw
+  Pencil, Download, UserCog, Link2, MapPin, RotateCcw, ClipboardList
 } from "lucide-react";
 import { computeLocalStats, computeOffWeeks, recalcScheduleHours } from "@/lib/scheduler";
 
@@ -65,6 +65,7 @@ interface ScheduleEntry {
   weekNum: number;
   isHoliday: boolean;
   isManual: boolean;
+  region: string;
 }
 
 interface LocalStats {
@@ -121,6 +122,7 @@ interface ConnectionTeamEntry {
   empName: string;
   empHrid: string;
   monthKey: string;
+  region: string;
 }
 
 interface RegionRotationEntry {
@@ -131,6 +133,22 @@ interface RegionRotationEntry {
   weekEnd: string;
   monthKey: string;
   notes: string;
+}
+
+interface ConnectionAssignment {
+  id: number;
+  employeeId: number;
+  date: string;
+  weekStart: string;
+  regionCovered: string;
+  hours: number;
+  overrideHours: number;
+}
+
+interface ConnectionAssignmentTotals {
+  employeeId: number;
+  weekly: { assignmentCount: number; totalHours: number } | null;
+  monthly: { assignmentCount: number; totalHours: number } | null;
 }
 
 // ===== Region helpers =====
@@ -353,6 +371,13 @@ export default function ShiftSchedulerPage() {
   const [connWeekIdx, setConnWeekIdx] = useState(0);
   const [connEmpIdx, setConnEmpIdx] = useState("");
 
+  // Connection team replace/transfer
+  const [showConnReplace, setShowConnReplace] = useState(false);
+  const [connReplaceFrom, setConnReplaceFrom] = useState("");
+  const [connReplaceTo, setConnReplaceTo] = useState("");
+  const [connReplaceWeekIdx, setConnReplaceWeekIdx] = useState(0);
+  const [connReplaceHours, setConnReplaceHours] = useState("");
+
   // Region rotation
   const [regionRotations, setRegionRotations] = useState<RegionRotationEntry[]>([]);
   const [showAddRotation, setShowAddRotation] = useState(false);
@@ -360,6 +385,17 @@ export default function ShiftSchedulerPage() {
   const [rotTargetArea, setRotTargetArea] = useState("");
   const [rotWeekIdx, setRotWeekIdx] = useState(0);
   const [rotNotes, setRotNotes] = useState("");
+
+  // Connection assignments
+  const [connAssignments, setConnAssignments] = useState<ConnectionAssignment[]>([]);
+  const [connAssignmentTotals, setConnAssignmentTotals] = useState<ConnectionAssignmentTotals[]>([]);
+  const [showAddAssignment, setShowAddAssignment] = useState(false);
+  const [assignEmpId, setAssignEmpId] = useState("");
+  const [assignRegionCovered, setAssignRegionCovered] = useState("");
+  const [assignWeekIdx, setAssignWeekIdx] = useState(0);
+  const [assignSplit, setAssignSplit] = useState<"full" | "first_half" | "second_half">("full");
+  const [assignHours, setAssignHours] = useState("");
+  const [assignOverrideHours, setAssignOverrideHours] = useState("");
 
   // Week collapse
   const [collapsedWeeks, setCollapsedWeeks] = useState<Set<string>>(new Set());
@@ -423,8 +459,7 @@ export default function ShiftSchedulerPage() {
 
   const fetchScheduleEntries = useCallback(async () => {
     try {
-      const regionParam = selectedRegion !== "all" ? `&region=${selectedRegion}` : "";
-      const res = await authFetch(`/api/schedule?month=${selectedMonth}${regionParam}`);
+      const res = await authFetch(`/api/schedule?month=${selectedMonth}`);
       if (res.ok) {
         const data = await res.json();
         if (data.entries) setEntries(data.entries);
@@ -433,7 +468,7 @@ export default function ShiftSchedulerPage() {
     } catch {
       // Failed to fetch entries
     }
-  }, [authFetch, selectedMonth, selectedRegion]);
+  }, [authFetch, selectedMonth]);
 
   const fetchConnectionTeam = useCallback(async () => {
     try {
@@ -499,8 +534,9 @@ export default function ShiftSchedulerPage() {
       fetchBalance();
       fetchConnectionTeam();
       fetchRegionRotations();
+      fetchConnAssignments();
     }
-  }, [isAuthenticated, dataLoading, selectedMonth, fetchScheduleEntries, fetchBalance, fetchConnectionTeam, fetchRegionRotations]);
+  }, [isAuthenticated, dataLoading, selectedMonth, fetchScheduleEntries, fetchBalance, fetchConnectionTeam, fetchRegionRotations, fetchConnAssignments]);
 
   // ===== Auth Actions =====
   const handleLogin = async () => {
@@ -593,7 +629,7 @@ export default function ShiftSchedulerPage() {
       if (res.status === 401) { handleLogout(); return; }
       const data = await res.json();
       if (res.ok) {
-        toast({ title: "Success", description: `Generated ${data.generated} shift entries for ${MONTHS[Number(m) - 1]} ${y}` });
+        toast({ title: "Success", description: `Generated ${data.generated} shift entries for ${MONTHS[Number(m) - 1]} ${y}${selectedRegion !== "all" ? ` (${REGIONS[selectedRegion] || selectedRegion})` : ""}` });
         await fetchAllData();
       } else {
         toast({ title: "Error", description: data.error || "Generation failed", variant: "destructive" });
@@ -635,7 +671,8 @@ export default function ShiftSchedulerPage() {
     if (!canAdmin) return;
     setGenerating(true);
     try {
-      const res = await authFetch(`/api/schedule?month=${selectedMonth}`, { method: "DELETE" });
+      const regionParam = selectedRegion !== "all" ? `&region=${selectedRegion}` : "";
+      const res = await authFetch(`/api/schedule?month=${selectedMonth}${regionParam}`, { method: "DELETE" });
       if (res.status === 401) { handleLogout(); return; }
       const data = await res.json();
       if (res.ok) {
@@ -672,7 +709,8 @@ export default function ShiftSchedulerPage() {
   const deleteEntry = async (date: string) => {
     if (!canEdit) return;
     try {
-      const res = await authFetch(`/api/schedule/${date}`, { method: "DELETE" });
+      const regionParam = selectedRegion !== "all" ? `?region=${selectedRegion}` : "";
+      const res = await authFetch(`/api/schedule/${date}${regionParam}`, { method: "DELETE" });
       if (res.ok) {
         setEntries(entries.filter((e) => e.date !== date));
         toast({ title: "Deleted", description: `Entry for ${date} removed` });
@@ -712,7 +750,7 @@ export default function ShiftSchedulerPage() {
     try {
       const res = await authFetch("/api/schedule/swap", {
         method: "POST",
-        body: JSON.stringify({ empIdxA, empIdxB, monthKey: selectedMonth }),
+        body: JSON.stringify({ empIdxA, empIdxB, monthKey: selectedMonth, region: selectedRegion }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -751,7 +789,7 @@ export default function ShiftSchedulerPage() {
     try {
       const res = await authFetch("/api/schedule/add-shift", {
         method: "POST",
-        body: JSON.stringify({ date: addShiftDate, empIdx, empName: emp.name, empHrid: emp.hrid, dayName: dayNames[jsDay], dayType, start: shift.start, end: shift.end, hours: shift.hours, weekNum }),
+        body: JSON.stringify({ date: addShiftDate, empIdx, empName: emp.name, empHrid: emp.hrid, dayName: dayNames[jsDay], dayType, start: shift.start, end: shift.end, hours: shift.hours, weekNum, region: selectedRegion }),
       });
       if (res.ok) {
         setShowAddShift(false);
@@ -780,7 +818,7 @@ export default function ShiftSchedulerPage() {
         const data = await res.json();
         setEmployees([...employees, data.employee]);
         setNewEmpName(""); setNewEmpHrid(""); setNewEmpRegion("all");
-        toast({ title: "Added", description: `${newEmpName} added to Connection Team` });
+        toast({ title: "Added", description: `${newEmpName} added to تيم الكونكشن` });
       }
     } catch {
       toast({ title: "Error", description: "Failed to add employee", variant: "destructive" });
@@ -970,6 +1008,31 @@ export default function ShiftSchedulerPage() {
     }
   };
 
+  // ===== Regenerate Single Week =====
+  const regenerateWeek = async (weekKey: string) => {
+    if (!canEdit) return;
+    setGenerating(true);
+    try {
+      const res = await authFetch("/api/schedule", {
+        method: "POST",
+        body: JSON.stringify({ mode: "week", weekStart: weekKey, region: selectedRegion }),
+      });
+      if (res.status === 401) { handleLogout(); return; }
+      const data = await res.json();
+      if (res.ok) {
+        toast({ title: "Week Regenerated", description: `Regenerated ${data.generated} entries for week starting ${weekKey}` });
+        await fetchScheduleEntries();
+        await fetchBalance();
+      } else {
+        toast({ title: "Error", description: data.error || "Failed to regenerate week", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", description: "Failed to regenerate week", variant: "destructive" });
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   // ===== Connection Team Actions =====
   const addConnectionPerson = async () => {
     if (!connEmpIdx) {
@@ -977,7 +1040,8 @@ export default function ShiftSchedulerPage() {
       return;
     }
     try {
-      const activeEmps = employees.filter((e) => e.active);
+      // Use only region-filtered active employees for Connection Team
+      const activeEmps = regionActiveEmps;
       const emp = activeEmps[Number(connEmpIdx)];
       if (!emp) return;
 
@@ -1007,19 +1071,19 @@ export default function ShiftSchedulerPage() {
 
       const res = await authFetch("/api/connection-team", {
         method: "POST",
-        body: JSON.stringify({ weekStart, weekEnd, empIdx: Number(connEmpIdx), empName: emp.name, empHrid: emp.hrid, monthKey: selectedMonth }),
+        body: JSON.stringify({ weekStart, weekEnd, empIdx: Number(connEmpIdx), empName: emp.name, empHrid: emp.hrid, monthKey: selectedMonth, region: selectedRegion }),
       });
       if (res.ok) {
-        toast({ title: "Added", description: `Connection person assigned for ${weekStart} to ${weekEnd}` });
+        toast({ title: "Added", description: `Connection Team member assigned for ${weekStart} to ${weekEnd}` });
         setShowAddConnection(false);
         setConnWeekIdx(0);
         setConnEmpIdx("");
         fetchConnectionTeam();
       } else {
-        toast({ title: "Error", description: "Failed to assign connection person", variant: "destructive" });
+        toast({ title: "Error", description: "Failed to assign Connection Team member", variant: "destructive" });
       }
     } catch {
-      toast({ title: "Error", description: "Failed to assign connection person", variant: "destructive" });
+      toast({ title: "Error", description: "Failed to assign Connection Team member", variant: "destructive" });
     }
   };
 
@@ -1027,11 +1091,164 @@ export default function ShiftSchedulerPage() {
     try {
       const res = await authFetch(`/api/connection-team?id=${id}`, { method: "DELETE" });
       if (res.ok) {
-        toast({ title: "Deleted", description: "Connection team entry removed" });
+        toast({ title: "Deleted", description: "Connection Team entry removed" });
         fetchConnectionTeam();
       }
     } catch {
       toast({ title: "Error", description: "Failed to delete", variant: "destructive" });
+    }
+  };
+
+  // ===== Connection Team Replace / Transfer =====
+  const replaceConnectionPerson = async () => {
+    if (!connReplaceTo) {
+      toast({ title: "Error", description: "Please select a target employee", variant: "destructive" });
+      return;
+    }
+    const weeks = buildWeekOptions();
+    const week = weeks[connReplaceWeekIdx];
+    if (!week) return;
+
+    try {
+      // Find and delete existing entry for this week
+      const existingEntry = connectionTeam.find(ct => ct.weekStart === week.weekStart);
+      if (existingEntry) {
+        await authFetch(`/api/connection-team?id=${existingEntry.id}`, { method: "DELETE" });
+      }
+
+      // Create new entry with target employee (region-filtered)
+      const activeEmps = regionActiveEmps;
+      const empIdx = activeEmps.findIndex(e => e.name === connReplaceTo);
+      if (empIdx < 0) return;
+      const targetEmp = activeEmps[empIdx];
+
+      const res = await authFetch("/api/connection-team", {
+        method: "POST",
+        body: JSON.stringify({
+          weekStart: week.weekStart,
+          weekEnd: week.weekEnd,
+          empIdx,
+          empName: targetEmp.name,
+          empHrid: targetEmp.hrid,
+          monthKey: selectedMonth,
+          region: selectedRegion,
+        }),
+      });
+
+      if (res.ok) {
+        toast({ title: "Replaced", description: `Connection Team member replaced for week ${formatDateDisplay(week.weekStart)} → ${formatDateDisplay(week.weekEnd)}` });
+        setShowConnReplace(false);
+        setConnReplaceFrom("");
+        setConnReplaceTo("");
+        setConnReplaceWeekIdx(0);
+        setConnReplaceHours("");
+        fetchConnectionTeam();
+      } else {
+        toast({ title: "Error", description: "Failed to replace Connection Team member", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", description: "Failed to replace Connection Team member", variant: "destructive" });
+    }
+  };
+
+  // ===== Connection Assignments Actions =====
+  const fetchConnAssignments = useCallback(async () => {
+    try {
+      const weekParam = buildWeekOptions().length > 0 ? `&week=${buildWeekOptions()[0].weekStart}` : "";
+      const res = await authFetch(`/api/connection-assignments?month=${selectedMonth}${weekParam}`);
+      if (res.ok) {
+        const data = await res.json();
+        setConnAssignments(data.entries || []);
+        setConnAssignmentTotals(data.totals || []);
+      }
+    } catch {
+      // ignore
+    }
+  }, [authFetch, selectedMonth]);
+
+  const addAssignment = async () => {
+    if (!assignEmpId || !assignRegionCovered) {
+      toast({ title: "Error", description: "Employee and region are required", variant: "destructive" });
+      return;
+    }
+    try {
+      const weeks = buildWeekOptions();
+      if (assignWeekIdx >= weeks.length) {
+        toast({ title: "Error", description: "Invalid week", variant: "destructive" });
+        return;
+      }
+      const week = weeks[assignWeekIdx];
+
+      if (assignSplit === "full") {
+        // Single assignment for the whole week
+        const ws = new Date(week.weekStart + "T00:00:00");
+        const we = new Date(week.weekEnd + "T00:00:00");
+        const daysInWeek: string[] = [];
+        for (let d = new Date(ws); d <= we; d.setDate(d.getDate() + 1)) {
+          daysInWeek.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`);
+        }
+
+        const entries = daysInWeek.map(date => ({
+          employeeId: Number(assignEmpId),
+          date,
+          weekStart: week.weekStart,
+          regionCovered: assignRegionCovered,
+          hours: Number(assignHours) || 0,
+          overrideHours: Number(assignOverrideHours) || 0,
+        }));
+
+        for (const entry of entries) {
+          await authFetch("/api/connection-assignments", { method: "POST", body: JSON.stringify(entry) });
+        }
+        toast({ title: "Assigned", description: `Full week assigned: ${formatDateDisplay(week.weekStart)} → ${formatDateDisplay(week.weekEnd)}` });
+      } else {
+        // Split week: first 3 days or last 4 days
+        const ws = new Date(week.weekStart + "T00:00:00");
+        const splitDays = assignSplit === "first_half"
+          ? [0, 1, 2]   // Fri, Sat, Sun
+          : [3, 4, 5, 6]; // Mon, Tue, Wed, Thu
+
+        const entries = splitDays.map(offset => {
+          const d = new Date(ws);
+          d.setDate(d.getDate() + offset);
+          const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+          return {
+            employeeId: Number(assignEmpId),
+            date,
+            weekStart: week.weekStart,
+            regionCovered: assignRegionCovered,
+            hours: Number(assignHours) || 0,
+            overrideHours: Number(assignOverrideHours) || 0,
+          };
+        });
+
+        for (const entry of entries) {
+          await authFetch("/api/connection-assignments", { method: "POST", body: JSON.stringify(entry) });
+        }
+        const label = assignSplit === "first_half" ? "First Half (Fri-Sun)" : "Second Half (Mon-Thu)";
+        toast({ title: "Assigned", description: `${label} assigned for week ${formatDateDisplay(week.weekStart)}` });
+      }
+
+      setShowAddAssignment(false);
+      setAssignEmpId("");
+      setAssignRegionCovered("");
+      setAssignWeekIdx(0);
+      setAssignSplit("full");
+      setAssignHours("");
+      setAssignOverrideHours("");
+      fetchConnAssignments();
+    } catch {
+      toast({ title: "Error", description: "Failed to create assignment", variant: "destructive" });
+    }
+  };
+
+  const deleteAssignment = async (id: number) => {
+    try {
+      await authFetch(`/api/connection-assignments?id=${id}`, { method: "DELETE" });
+      toast({ title: "Deleted", description: "Assignment removed" });
+      fetchConnAssignments();
+    } catch {
+      toast({ title: "Error", description: "Failed to delete assignment", variant: "destructive" });
     }
   };
 
@@ -1096,23 +1313,21 @@ export default function ShiftSchedulerPage() {
     }
   };
 
-  // ===== Region-filtered entries =====
+  // ===== Region-filtered entries — STRICT (use entry.region column directly) =====
   const monthEntries = entries.filter((e) => e.date.startsWith(selectedMonth));
-  const filteredEntries = selectedRegion === "all" ? monthEntries : monthEntries.filter((e) => {
-    const emp = employees.find(emp => emp.name === e.empName);
-    return emp && emp.region === selectedRegion;
-  });
+  const filteredEntries = selectedRegion === "all" ? monthEntries : monthEntries.filter((e) => e.region === selectedRegion);
   const regionActiveEmps = employees.filter((e) => e.active && (selectedRegion === "all" || e.region === selectedRegion));
   const connectionEmpSet = new Set(connectionTeam.filter((ct) => {
     if (selectedRegion === "all") return true;
-    const emp = employees.find(e => e.name === ct.empName);
-    return emp && emp.region === selectedRegion;
+    return ct.region === selectedRegion;
   }).map((c) => `${c.empName}-${c.weekStart}`));
 
-  // Build connection team lookup by week start date
+  // Build connection team lookup by week start date (STRICT region filter)
   const connectionByWeek = new Map<string, ConnectionTeamEntry>();
   for (const ct of connectionTeam) {
-    connectionByWeek.set(ct.weekStart, ct);
+    if (selectedRegion === "all" || ct.region === selectedRegion) {
+      connectionByWeek.set(ct.weekStart, ct);
+    }
   }
 
   // Calculate connection team hours for each entry (full week hours)
@@ -1360,49 +1575,17 @@ export default function ShiftSchedulerPage() {
           </div>
         )}
 
-        {/* CONNECTION TEAM SECTION */}
-        <div className="max-w-7xl mx-auto w-full px-4 mt-4">
-          <Card className="shadow-sm border-teal-200 dark:border-teal-800">
-            <div className="bg-gradient-to-r from-teal-600 to-teal-500 text-white px-4 py-2.5 flex items-center justify-between">
-              <div className="flex items-center gap-2"><Link2 className="h-4 w-4" /><span className="font-semibold text-sm">Connection Team</span></div>
-              {canEdit && (
-                <Button size="sm" variant="ghost" className="text-white hover:bg-teal-700 h-7 text-xs" onClick={() => { setConnWeekIdx(0); setConnEmpIdx(""); setShowAddConnection(true); }}><Plus className="h-3.5 w-3.5 mr-1" />Assign</Button>
+        {/* CONNECTION TEAM TOOLBAR BUTTONS */}
+        {canEdit && (
+          <div className="max-w-7xl mx-auto w-full px-4 mt-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button size="sm" variant="outline" className="border-teal-300 text-teal-700 hover:bg-teal-50 h-8" onClick={() => { setConnWeekIdx(0); setConnEmpIdx(""); setShowAddConnection(true); }}><Plus className="h-3.5 w-3.5 mr-1" />تيم الكونكشن</Button>
+              {connectionTeam.length > 0 && (
+                <Button size="sm" variant="outline" className="border-teal-300 text-teal-700 hover:bg-teal-50 h-8" onClick={() => { setConnReplaceFrom(""); setConnReplaceTo(""); setConnReplaceWeekIdx(0); setConnReplaceHours(""); setShowConnReplace(true); }}><ArrowLeftRight className="h-3.5 w-3.5 mr-1" />تبديل تيم الكونكشن</Button>
               )}
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead><tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-                  <th className="px-3 py-2 text-left text-xs text-slate-500">Week Period</th>
-                  <th className="px-3 py-2 text-left text-xs text-slate-500">Employee</th>
-                  <th className="px-3 py-2 text-left text-xs text-slate-500 hidden sm:table-cell">HRID</th>
-                  <th className="px-3 py-2 text-center text-xs text-slate-500">Week Hours</th>
-                  {canAdmin && <th className="px-3 py-2 text-center text-xs text-slate-500">Actions</th>}
-                </tr></thead>
-                <tbody>
-                  {connectionTeam.filter(ct => {
-                    if (selectedRegion === "all") return true;
-                    const emp = employees.find(e => e.name === ct.empName);
-                    return emp && emp.region === selectedRegion;
-                  }).map((ct) => {
-                    const connHrs = calcConnectionWeekHours(ct.weekStart, ct.weekEnd);
-                    return (
-                    <tr key={ct.id} className="border-b border-slate-100 dark:border-slate-800">
-                      <td className="px-3 py-2 text-xs font-medium text-slate-700 dark:text-slate-200">{formatDateDisplay(ct.weekStart)} → {formatDateDisplay(ct.weekEnd)}</td>
-                      <td className="px-3 py-2 text-sm font-semibold text-teal-700 dark:text-teal-300">{ct.empName}</td>
-                      <td className="px-3 py-2 text-xs text-slate-500 hidden sm:table-cell">{ct.empHrid}</td>
-                      <td className="px-3 py-2 text-center"><span className="font-bold text-teal-600 dark:text-teal-400 text-sm">{connHrs.toFixed(1)}h</span></td>
-                      {canAdmin && <td className="px-3 py-2 text-center"><Button size="icon" variant="ghost" className="h-7 w-7 text-red-400 hover:text-red-600" onClick={() => deleteConnectionEntry(ct.id)}><Trash2 className="h-3.5 w-3.5" /></Button></td>}
-                    </tr>
-                    );
-                  })}
-                  {connectionTeam.length === 0 && (
-                    <tr><td colSpan={canAdmin ? 5 : 4} className="px-3 py-4 text-center text-xs text-slate-400 italic">No connection team assignments yet.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        </div>
+          </div>
+        )}
 
         {/* REGION ROTATION SECTION */}
         {regionRotations.length > 0 && (
@@ -1440,6 +1623,72 @@ export default function ShiftSchedulerPage() {
           </div>
         )}
 
+        {/* CONNECTION ASSIGNMENTS SECTION */}
+        <div className="max-w-7xl mx-auto w-full px-4 mt-4">
+          <Card className="shadow-sm border-violet-200 dark:border-violet-800">
+            <div className="bg-gradient-to-r from-violet-600 to-violet-500 text-white px-4 py-2.5 flex items-center justify-between">
+              <div className="flex items-center gap-2"><ClipboardList className="h-4 w-4" /><span className="font-semibold text-sm">Connection Assignments</span></div>
+              {canEdit && (
+                <Button size="sm" variant="ghost" className="text-white hover:bg-violet-700 h-7 text-xs" onClick={() => { setAssignEmpId(""); setAssignRegionCovered(""); setAssignWeekIdx(0); setAssignSplit("full"); setAssignHours(""); setAssignOverrideHours(""); setShowAddAssignment(true); }}><Plus className="h-3.5 w-3.5 mr-1" />New Assignment</Button>
+              )}
+            </div>
+
+            {/* Totals summary */}
+            {connAssignmentTotals.length > 0 && (
+              <div className="px-4 pt-3 pb-2">
+                <div className="flex flex-wrap gap-3">
+                  {connAssignmentTotals.map((t) => {
+                    const emp = employees.find(e => e.id === t.employeeId);
+                    const name = emp?.name || `Emp #${t.employeeId}`;
+                    return (
+                      <div key={t.employeeId} className="bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 rounded-lg px-3 py-2 min-w-[140px]">
+                        <div className="text-xs font-medium text-violet-700 dark:text-violet-300">{name}</div>
+                        <div className="flex gap-3 mt-1">
+                          {t.weekly && <div className="text-[10px] text-slate-500">Week: <span className="font-semibold text-slate-700 dark:text-slate-200">{t.weekly.totalHours.toFixed(1)}h</span> <span className="text-slate-400">({t.weekly.assignmentCount}d)</span></div>}
+                          {t.monthly && <div className="text-[10px] text-slate-500">Month: <span className="font-semibold text-slate-700 dark:text-slate-200">{t.monthly.totalHours.toFixed(1)}h</span> <span className="text-slate-400">({t.monthly.assignmentCount}d)</span></div>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Assignment rows grouped by week */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead><tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+                  <th className="px-3 py-2 text-left text-xs text-slate-500">Employee</th>
+                  <th className="px-3 py-2 text-left text-xs text-slate-500">Date</th>
+                  <th className="px-3 py-2 text-left text-xs text-slate-500">Week</th>
+                  <th className="px-3 py-2 text-left text-xs text-slate-500">Region</th>
+                  <th className="px-3 py-2 text-center text-xs text-slate-500">Hours</th>
+                  <th className="px-3 py-2 text-center text-xs text-slate-500">Override</th>
+                  {canEdit && <th className="px-3 py-2 text-center text-xs text-slate-500">Actions</th>}
+                </tr></thead>
+                <tbody>
+                  {connAssignments.length === 0 ? (
+                    <tr><td colSpan={canEdit ? 7 : 6} className="px-3 py-6 text-center text-xs text-slate-400 italic">No connection assignments for this month</td></tr>
+                  ) : connAssignments.map((a) => {
+                    const emp = employees.find(e => e.id === a.employeeId);
+                    return (
+                      <tr key={a.id} className="border-b border-slate-100 dark:border-slate-800">
+                        <td className="px-3 py-2 text-xs font-medium text-slate-700 dark:text-slate-200">{emp?.name || `#${a.employeeId}`}</td>
+                        <td className="px-3 py-2 text-xs text-slate-500">{formatDateDisplay(a.date)}</td>
+                        <td className="px-3 py-2 text-xs text-slate-500">{a.weekStart ? formatDateDisplay(a.weekStart) : "-"}</td>
+                        <td className="px-3 py-2"><Badge variant="outline" className="text-violet-700 border-violet-300 bg-violet-50 dark:bg-violet-950/20 text-[10px]">{REGIONS[a.regionCovered] || a.regionCovered}</Badge></td>
+                        <td className="px-3 py-2 text-center text-xs font-medium text-slate-700 dark:text-slate-200">{a.hours > 0 ? a.hours.toFixed(1) : "-"}</td>
+                        <td className="px-3 py-2 text-center text-xs">{a.overrideHours > 0 ? <span className="font-semibold text-amber-600">{a.overrideHours.toFixed(1)}h</span> : <span className="text-slate-300">-</span>}</td>
+                        {canEdit && <td className="px-3 py-2 text-center"><Button size="icon" variant="ghost" className="h-7 w-7 text-red-400 hover:text-red-600" onClick={() => deleteAssignment(a.id)}><Trash2 className="h-3.5 w-3.5" /></Button></td>}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+
         {/* SCHEDULE TABLE */}
         <main className="max-w-7xl mx-auto w-full px-4 mt-4 mb-8 flex-1">
           {dataLoading ? (
@@ -1464,12 +1713,24 @@ export default function ShiftSchedulerPage() {
                       <div className="flex items-center gap-2 flex-wrap">
                         {connPerson && (() => {
                           const connHrs = calcConnectionWeekHours(connPerson.weekStart, connPerson.weekEnd);
-                          return <Badge className="bg-teal-500/90 text-white border-0 text-xs"><Link2 className="h-2.5 w-2.5 mr-0.5" />Connection: {connPerson.empName} ({connHrs.toFixed(1)}h)</Badge>;
+                          return <Badge className="bg-teal-500/90 text-white border-0 text-xs"><Link2 className="h-2.5 w-2.5 mr-0.5" />تيم الكونكشن: {connPerson.empName} ({connHrs.toFixed(1)}h)</Badge>;
                         })()}
                         <Badge className="bg-red-500/80 text-white border-0 text-xs">OFF: {offPerson}</Badge>
+                        {canEdit && (
+                          <Tooltip><TooltipTrigger asChild>
+                            <button
+                              className="p-1 rounded hover:bg-white/20 transition-colors"
+                              onClick={(e) => { e.stopPropagation(); regenerateWeek(week.key); }}
+                              disabled={generating}
+                            >
+                              <RefreshCw className={`h-3.5 w-3.5 text-white/80 ${generating ? "animate-spin" : ""}`} />
+                            </button>
+                          </TooltipTrigger><TooltipContent>Regenerate this week (reassign OFF + redistribute shifts)</TooltipContent></Tooltip>
+                        )}
                       </div>
                     </div>
                     {!isCollapsed && (
+                      <>
                       <div className="overflow-x-auto">
                         <table className="w-full text-sm">
                           <thead><tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
@@ -1538,6 +1799,21 @@ export default function ShiftSchedulerPage() {
                           </tbody>
                         </table>
                       </div>
+                      {/* Connection Team info bar at bottom of week */}
+                      {connPerson && (
+                        <div className="bg-teal-50 dark:bg-teal-950/20 border-t border-teal-200 dark:border-teal-800 px-4 py-2.5 flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-sm text-teal-700 dark:text-teal-300">
+                            <Link2 className="h-4 w-4" />
+                            <span className="font-semibold text-teal-800 dark:text-teal-200">تيم الكونكشن: {connPerson.empName} ({connPerson.empHrid}) | {calcConnectionWeekHours(connPerson.weekStart, connPerson.weekEnd).toFixed(1)}h</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            {canEdit && (
+                              <Tooltip><TooltipTrigger asChild><Button size="icon" variant="ghost" className="h-7 w-7 text-red-400 hover:text-red-600" onClick={() => deleteConnectionEntry(connPerson.id)}><Trash2 className="h-3.5 w-3.5" /></Button></TooltipTrigger><TooltipContent>Remove Connection Team assignment</TooltipContent></Tooltip>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      </>
                     )}
                   </Card>
                 );
@@ -1646,7 +1922,7 @@ export default function ShiftSchedulerPage() {
         {/* ===== EMPLOYEES MODAL ===== */}
         <Dialog open={showEmployees} onOpenChange={setShowEmployees}>
           <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
-            <DialogHeader><DialogTitle className="flex items-center gap-2"><Users className="h-5 w-5" /> Connection Team Members</DialogTitle><DialogDescription>Manage your Connection Team roster</DialogDescription></DialogHeader>
+            <DialogHeader><DialogTitle className="flex items-center gap-2"><Users className="h-5 w-5" /> تيم الكونكشن / Connection Team</DialogTitle><DialogDescription>Manage your Connection Team roster</DialogDescription></DialogHeader>
             <div className="space-y-4 mt-2">
               {canEdit && (
                 <div className="flex gap-2">
@@ -1707,11 +1983,11 @@ export default function ShiftSchedulerPage() {
               <Separator />
               <div><Label className="text-xs font-medium">Select Employees</Label>
                 <div className="mt-2 flex gap-2 mb-2">
-                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setExportSelectedIds(employees.map((e) => e.id))}>Select All</Button>
+                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { const regionEmps = exportRegion !== "all" ? employees.filter(e => e.region === exportRegion) : employees; setExportSelectedIds(regionEmps.map((e) => e.id)); }}>Select All</Button>
                   <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setExportSelectedIds([])}>Deselect All</Button>
                 </div>
                 <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                  {employees.map((emp) => (
+                  {(exportRegion !== "all" ? employees.filter(e => e.region === exportRegion) : employees).map((emp) => (
                     <div key={emp.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-50 dark:hover:bg-slate-800">
                       <Checkbox checked={exportSelectedIds.includes(emp.id)} onCheckedChange={(checked) => { if (checked) setExportSelectedIds([...exportSelectedIds, emp.id]); else setExportSelectedIds(exportSelectedIds.filter((id) => id !== emp.id)); }} />
                       <span className="text-sm">{emp.name} <span className="text-xs text-slate-400">({emp.hrid})</span></span>
@@ -1891,10 +2167,10 @@ export default function ShiftSchedulerPage() {
           </DialogContent>
         </Dialog>
 
-        {/* ===== ADD CONNECTION PERSON MODAL ===== */}
+        {/* ===== ADD CONNECTION TEAM MODAL ===== */}
         <Dialog open={showAddConnection} onOpenChange={setShowAddConnection}>
           <DialogContent className="max-w-sm">
-            <DialogHeader><DialogTitle className="flex items-center gap-2"><Link2 className="h-5 w-5" /> Assign Connection Person</DialogTitle><DialogDescription>Assign a Connection Team member for a specific week</DialogDescription></DialogHeader>
+            <DialogHeader><DialogTitle className="flex items-center gap-2"><Link2 className="h-5 w-5" /> تعيين تيم الكونكشن</DialogTitle><DialogDescription>Assign a Connection Team member for a specific week</DialogDescription></DialogHeader>
             <div className="space-y-3 mt-2">
               <div><Label className="text-xs">Week</Label>
                 <Select value={String(connWeekIdx)} onValueChange={(v) => setConnWeekIdx(Number(v))}>
@@ -1909,7 +2185,7 @@ export default function ShiftSchedulerPage() {
               <div><Label className="text-xs">Employee</Label>
                 <Select value={connEmpIdx} onValueChange={setConnEmpIdx}>
                   <SelectTrigger className="mt-1"><SelectValue placeholder="Select employee" /></SelectTrigger>
-                  <SelectContent>{employees.filter((e) => e.active).map((emp, idx) => (
+                  <SelectContent>{regionActiveEmps.map((emp, idx) => (
                     <SelectItem key={emp.id} value={String(idx)}>{emp.name} ({emp.hrid})</SelectItem>
                   ))}</SelectContent>
                 </Select>
@@ -1934,7 +2210,80 @@ export default function ShiftSchedulerPage() {
                 return null;
               })()}
             </div>
-            <DialogFooter><Button variant="outline" onClick={() => setShowAddConnection(false)}>Cancel</Button><Button onClick={addConnectionPerson} className="bg-teal-600 hover:bg-teal-700 text-white">Assign</Button></DialogFooter>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowAddConnection(false)}>Cancel</Button>
+              {(() => {
+                const weeks = buildWeekOptions();
+                const week = weeks[connWeekIdx];
+                const existingConn = week ? connectionTeam.find(ct => ct.weekStart === week.weekStart) : null;
+                return existingConn ? (
+                  <Button onClick={() => { setConnReplaceFrom(existingConn.empName); setConnReplaceTo(""); setConnReplaceWeekIdx(connWeekIdx); setConnReplaceHours(""); setShowAddConnection(false); setShowConnReplace(true); }} className="bg-amber-600 hover:bg-amber-700 text-white">Replace (Current: {existingConn.empName})</Button>
+                ) : (
+                  <Button onClick={addConnectionPerson} className="bg-teal-600 hover:bg-teal-700 text-white">Assign</Button>
+                );
+              })()}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* ===== TRANSFER CONNECTION HOURS MODAL ===== */}
+        <Dialog open={showConnReplace} onOpenChange={setShowConnReplace}>
+          <DialogContent className="max-w-md">
+            <DialogHeader><DialogTitle className="flex items-center gap-2"><ArrowLeftRight className="h-5 w-5" /> تبديل تيم الكونكشن</DialogTitle><DialogDescription>Replace a Connection Team member for a specific week</DialogDescription></DialogHeader>
+            <div className="space-y-3 mt-2">
+              <div><Label className="text-xs">Week (with existing Connection Team assignment)</Label>
+                <Select value={String(connReplaceWeekIdx)} onValueChange={(v) => {
+                  const newIdx = Number(v);
+                  setConnReplaceWeekIdx(newIdx);
+                  const weeks = buildWeekOptions();
+                  const week = weeks[newIdx];
+                  const existing = week ? connectionTeam.find(ct => ct.weekStart === week.weekStart) : undefined;
+                  if (existing) {
+                    setConnReplaceFrom(existing.empName);
+                    setConnReplaceHours(String(calcConnectionWeekHours(existing.weekStart, existing.weekEnd)));
+                  } else {
+                    setConnReplaceFrom("");
+                    setConnReplaceHours("");
+                  }
+                  setConnReplaceTo("");
+                }}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {buildWeekOptions().filter((w) => connectionTeam.some(ct => ct.weekStart === w.weekStart)).map((w, i) => {
+                      const actualIdx = buildWeekOptions().findIndex(wo => wo.weekStart === w.weekStart);
+                      const ct = connectionTeam.find(c => c.weekStart === w.weekStart);
+                      return (<SelectItem key={actualIdx} value={String(actualIdx)}>{formatDateDisplay(w.weekStart)} → {formatDateDisplay(w.weekEnd)} ({ct?.empName})</SelectItem>);
+                    })}
+                  </SelectContent>
+                </Select>
+                {buildWeekOptions().filter((w) => connectionTeam.some(ct => ct.weekStart === w.weekStart)).length === 0 && (
+                  <p className="text-xs text-slate-400 mt-1 italic">No Connection Team assignments found for this month.</p>
+                )}
+              </div>
+              {connReplaceFrom && (
+                <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3">
+                  <div className="text-xs font-medium text-amber-700 dark:text-amber-300">Current Connection Team Member:</div>
+                  <div className="text-sm font-semibold text-amber-800 dark:text-amber-200 mt-0.5">{connReplaceFrom} {connReplaceHours && <span className="text-xs font-normal text-amber-600">({Number(connReplaceHours).toFixed(1)}h)</span>}</div>
+                </div>
+              )}
+              <div><Label className="text-xs">Transfer to Employee</Label>
+                <Select value={connReplaceTo} onValueChange={setConnReplaceTo}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select target employee" /></SelectTrigger>
+                  <SelectContent>{regionActiveEmps.filter((e) => e.name !== connReplaceFrom).map((emp) => (
+                    <SelectItem key={emp.id} value={emp.name}>{emp.name} ({emp.hrid})</SelectItem>
+                  ))}</SelectContent>
+                </Select>
+              </div>
+              {connReplaceTo && connReplaceHours && (
+                <div className="bg-teal-50 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-800 rounded-lg p-3">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-teal-700 dark:text-teal-300">
+                    <Clock className="h-4 w-4" />
+                    Transfer: {Number(connReplaceHours).toFixed(1)}h from {connReplaceFrom} → {connReplaceTo}
+                  </div>
+                </div>
+              )}
+            </div>
+            <DialogFooter><Button variant="outline" onClick={() => setShowConnReplace(false)}>Cancel</Button><Button onClick={replaceConnectionPerson} disabled={!connReplaceTo || !connReplaceFrom} className="bg-teal-600 hover:bg-teal-700 text-white">Transfer &amp; Replace</Button></DialogFooter>
           </DialogContent>
         </Dialog>
 
@@ -1967,6 +2316,60 @@ export default function ShiftSchedulerPage() {
               <div><Label className="text-xs">Notes (optional)</Label><Input value={rotNotes} onChange={(e) => setRotNotes(e.target.value)} className="mt-1" placeholder="Any notes..." /></div>
             </div>
             <DialogFooter><Button variant="outline" onClick={() => setShowAddRotation(false)}>Cancel</Button><Button onClick={addRotation} className="bg-orange-600 hover:bg-orange-700 text-white">Add Rotation</Button></DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* ===== ADD CONNECTION ASSIGNMENT MODAL ===== */}
+        <Dialog open={showAddAssignment} onOpenChange={setShowAddAssignment}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader><DialogTitle className="flex items-center gap-2"><ClipboardList className="h-5 w-5" /> New Connection Assignment</DialogTitle><DialogDescription>Assign an employee to cover a region for a week</DialogDescription></DialogHeader>
+            <div className="space-y-3 mt-2">
+              <div><Label className="text-xs">Employee</Label>
+                <Select value={assignEmpId} onValueChange={setAssignEmpId}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select employee" /></SelectTrigger>
+                  <SelectContent>{regionActiveEmps.map((emp) => (
+                    <SelectItem key={emp.id} value={String(emp.id)}>{emp.name} ({emp.hrid})</SelectItem>
+                  ))}</SelectContent>
+                </Select>
+              </div>
+              <div><Label className="text-xs">Region Covered</Label>
+                <Select value={assignRegionCovered} onValueChange={setAssignRegionCovered}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select region" /></SelectTrigger>
+                  <SelectContent>{Object.entries(REGIONS).filter(([k]) => k !== "all").map(([key, label]) => (
+                    <SelectItem key={key} value={key}>{label}</SelectItem>
+                  ))}</SelectContent>
+                </Select>
+              </div>
+              <div><Label className="text-xs">Week</Label>
+                <Select value={String(assignWeekIdx)} onValueChange={(v) => setAssignWeekIdx(Number(v))}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>{buildWeekOptions().map((w, i) => (
+                    <SelectItem key={i} value={String(i)}>{formatDateDisplay(w.weekStart)} → {formatDateDisplay(w.weekEnd)}</SelectItem>
+                  ))}</SelectContent>
+                </Select>
+              </div>
+              <div><Label className="text-xs">Split</Label>
+                <Select value={assignSplit} onValueChange={(v) => setAssignSplit(v as "full" | "first_half" | "second_half")}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="full">Full Week (7 days)</SelectItem>
+                    <SelectItem value="first_half">First Half (Fri-Sun)</SelectItem>
+                    <SelectItem value="second_half">Second Half (Mon-Thu)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  {assignSplit === "full" && "Assigns employee for all 7 days of the week"}
+                  {assignSplit === "first_half" && "Assigns for Friday, Saturday, Sunday only"}
+                  {assignSplit === "second_half" && "Assigns for Monday, Tuesday, Wednesday, Thursday only"}
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div><Label className="text-xs">Hours (daily)</Label><Input type="number" step="0.5" min="0" value={assignHours} onChange={(e) => setAssignHours(e.target.value)} className="mt-1" placeholder="e.g. 5" /></div>
+                <div><Label className="text-xs">Override Hours</Label><Input type="number" step="0.5" min="0" value={assignOverrideHours} onChange={(e) => setAssignOverrideHours(e.target.value)} className="mt-1" placeholder="0 = use default" /></div>
+              </div>
+              <p className="text-[10px] text-slate-400">Override hours take priority over default hours if set.</p>
+            </div>
+            <DialogFooter><Button variant="outline" onClick={() => setShowAddAssignment(false)}>Cancel</Button><Button onClick={addAssignment} disabled={!assignEmpId || !assignRegionCovered} className="bg-violet-600 hover:bg-violet-700 text-white">Assign</Button></DialogFooter>
           </DialogContent>
         </Dialog>
       </div>
