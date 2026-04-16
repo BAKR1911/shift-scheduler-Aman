@@ -2,6 +2,7 @@
 
 export const dynamic = 'force-dynamic';
 
+
 import React, { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -469,6 +470,40 @@ export default function ShiftSchedulerPage() {
     } catch {
       // Failed to fetch entries
     }
+  const buildWeekOptions = () => {
+    const [y, m] = selectedMonth.split("-");
+    const year = Number(y);
+    const month = Number(m);
+    const firstDay = new Date(year, month - 1, 1);
+    const lastDay = new Date(year, month, 0);
+    let d = new Date(firstDay);
+    while (d.getDay() !== 5) d.setDate(d.getDate() - 1);
+    const weeks: { weekStart: string; weekEnd: string }[] = [];
+    while (d <= lastDay) {
+      const ws = new Date(d);
+      const we = new Date(d);
+      we.setDate(we.getDate() + 6);
+      const wsStr = `${ws.getFullYear()}-${String(ws.getMonth() + 1).padStart(2, "0")}-${String(ws.getDate()).padStart(2, "0")}`;
+      const weStr = `${we.getFullYear()}-${String(we.getMonth() + 1).padStart(2, "0")}-${String(we.getDate()).padStart(2, "0")}`;
+      weeks.push({ weekStart: wsStr, weekEnd: weStr });
+      d.setDate(d.getDate() + 7);
+    }
+    return weeks;
+  };
+
+  const fetchConnAssignments = useCallback(async () => {
+    try {
+      const weekParam = buildWeekOptions().length > 0 ? `&week=${buildWeekOptions()[0].weekStart}` : "";
+      const res = await authFetch(`/api/connection-assignments?month=${selectedMonth}${weekParam}`);
+      if (res.ok) {
+        const data = await res.json();
+        setConnAssignments(data.entries || []);
+        setConnAssignmentTotals(data.totals || []);
+      }
+    } catch {
+      // ignore
+    }
+  }, [authFetch, selectedMonth]);
   }, [authFetch, selectedMonth]);
 
   const fetchConnectionTeam = useCallback(async () => {
