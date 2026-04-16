@@ -1,10 +1,14 @@
+تم حل المشكلة عن طريق إعادة ترتيب الكود. الخطأ `ReferenceError: Cannot access 'c6' before initialization` كان يحدث لأن المتغيرات المحسوبة (مثل `regionActiveEmps` و `filteredEntries`) كانت معرفة في نهاية الملف (أسفل الكود)، ولكن كانت دوال التعامل مع الأحداث (مثل `addConnectionPerson`) تستخدمها في الأعلى، مما يسبب خطأ في ترتيب التهيئة عند بناء المشروع.
+
+تم نقل كتلة البيانات المحسوبة (Computed State) إلى أعلى المكون، بعد تعريف الـ `State` وقبل تعريف الدوال، لضمان توفرها عند استخدامها.
+
+إليك الملف الكامل بعد التعديل:
+
+```tsx
 "use client";
 
-  }, [authFetch, selectedMonth]);
-
-  // Check auth on mount
-
 import React, { useState, useEffect, useCallback } from "react";
+import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -407,9 +411,105 @@ export default function ShiftSchedulerPage() {
   const [editingHoursDate, setEditingHoursDate] = useState<string | null>(null);
   const [editingHoursValue, setEditingHoursValue] = useState<string>("");
 
-  // Role helpers
+  // ===== Compute Derived State (Moved Up) =====
+  const monthEntries = entries.filter((e) => e.date.startsWith(selectedMonth));
+  const filteredEntries = selectedRegion === "all" ? monthEntries : monthEntries.filter((e) => e.region === selectedRegion);
+  const regionActiveEmps = employees.filter((e) => e.active && (selectedRegion === "all" || e.region === selectedRegion));
+  
+  const connectionEmpSet = new Set(connectionTeam.filter((ct) => {
+    if (selectedRegion === "all") return true;
+    return ct.region === selectedRegion;
+  }).map((c) => `${c.empName}-${c.weekStart}`));
+
+  const connectionByWeek = new Map<string, ConnectionTeamEntry>();
+  for (const ct of connectionTeam) {
+    if (selectedRegion === "all" || ct.region === selectedRegion) {
+      connectionByWeek.set(ct.weekStart, ct);
+    }
+  }
+
+  const calcConnectionWeekHours = (weekStart: string, weekEnd: string): number => {
+    if (!settings) return 0;
+    let total = 0;
+    const start = new Date(weekStart + "T00:00:00");
+    const end = new Date(weekEnd + "T00:00:00");
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      if (settings.dayHours && settings.dayHours[dateStr] !== undefined) {
+        total += settings.dayHours[dateStr];
+      } else {
+        const jsDay = d.getDay();
+        let dayType = "Weekday";
+        if (jsDay === 6) dayType = "Saturday";
+        else if (jsDay === 5) dayType = "Friday";
+        else if (jsDay === 4) dayType = "Thursday";
+        const isHol = settings.holidays?.includes(dateStr) || false;
+        if (isHol && settings.shifts["Holiday"]) {
+          total += settings.shifts["Holiday"].hours;
+        } else if (settings.summerTime && settings.summerShifts?.[dayType]) {
+          total += settings.summerShifts[dayType].hours;
+        } else {
+          total += settings.shifts[dayType]?.hours || settings.shifts["Weekday"]?.hours || 5;
+        }
+      }
+    }
+    return total;
+  };
+
+  const weekMap = new Map<string, ScheduleEntry[]>();
+  for (const entry of filteredEntries) {
+    const wk = getWeekNumber(entry.date);
+    if (!weekMap.has(wk)) weekMap.set(wk, []);
+    weekMap.get(wk)!.push(entry);
+  }
+
+  const weekGroups: { key: string; entries: ScheduleEntry[]; label: string }[] = [];
+  let weekIndex = 0;
+  for (const [key, weekEntries] of weekMap) {
+    const sorted = weekEntries.sort((a, b) => a.date.localeCompare(b.date));
+    const totalHrs = sorted.reduce((s, e) => s + e.hours, 0);
+    const offPerson = sorted[0]?.offPerson || "N/A";
+    weekGroups.push({
+      key,
+      entries: sorted,
+      label: `Week ${weekIndex + 1}: ${formatDateDisplay(sorted[0].date)} → ${formatDateDisplay(sorted[sorted.length - 1].date)} | ${sorted.length} days | ${totalHrs.toFixed(1)}h | OFF: ${offPerson}`,
+    });
+  }
+
+  const totalHours = filteredEntries.reduce((s, e) => s + e.hours, 0);
+  const totalDays = filteredEntries.length;
+  const totalHolidays = filteredEntries.filter((e) => e.isHoliday).length;
+  const totalWeeks = weekGroups.length;
+  
+  const roleColor = user?.role === "admin" ? "bg-red-500" : user?.role === "editor" ? "bg-amber-500" : "bg-slate-500";
   const canEdit = user && (user.role === "admin" || user.role === "editor");
   const canAdmin = user && user.role === "admin";
+
+  // ===== Build week options for dialogs =====
+  const buildWeekOptions = () => {
+    const [y, m] = selectedMonth.split("-");
+    const year = Number(y);
+    const month = Number(m);
+    const firstDay = new Date(year, month - 1, 1);
+    const lastDay = new Date(year, month, 0);
+    let d = new Date(firstDay);
+    while (d.getDay() !== 5) d.setDate(d.getDate() - 1);
+    const weeks: { weekStart: string; weekEnd: string }[] = [];
+    while (d <= lastDay) {
+      const ws = new Date(d);
+      const we = new Date(d);
+      we.setDate(we.getDate() + 6);
+      const wsStr = `${ws.getFullYear()}-${String(ws.getMonth() + 1).padStart(2, "0")}-${String(ws.getDate()).padStart(2, "0")}`;
+      const weStr = `${we.getFullYear()}-${String(we.getMonth() + 1).padStart(2, "0")}-${String(we.getDate()).padStart(2, "0")}`;
+      weeks.push({ weekStart: wsStr, weekEnd: weStr });
+      d.setDate(d.getDate() + 7);
+    }
+    return weeks;
+  };
+
+  // Role helpers
+  // const canEdit = user && (user.role === "admin" || user.role === "editor");
+  // const canAdmin = user && user.role === "admin";
 
   // Authenticated fetch wrapper
   const authFetch = useCallback(async (url: string, options: RequestInit = {}) => {
@@ -471,40 +571,6 @@ export default function ShiftSchedulerPage() {
     } catch {
       // Failed to fetch entries
     }
-  const buildWeekOptions = () => {
-    const [y, m] = selectedMonth.split("-");
-    const year = Number(y);
-    const month = Number(m);
-    const firstDay = new Date(year, month - 1, 1);
-    const lastDay = new Date(year, month, 0);
-    let d = new Date(firstDay);
-    while (d.getDay() !== 5) d.setDate(d.getDate() - 1);
-    const weeks: { weekStart: string; weekEnd: string }[] = [];
-    while (d <= lastDay) {
-      const ws = new Date(d);
-      const we = new Date(d);
-      we.setDate(we.getDate() + 6);
-      const wsStr = `${ws.getFullYear()}-${String(ws.getMonth() + 1).padStart(2, "0")}-${String(ws.getDate()).padStart(2, "0")}`;
-      const weStr = `${we.getFullYear()}-${String(we.getMonth() + 1).padStart(2, "0")}-${String(we.getDate()).padStart(2, "0")}`;
-      weeks.push({ weekStart: wsStr, weekEnd: weStr });
-      d.setDate(d.getDate() + 7);
-    }
-    return weeks;
-  };
-
-  const fetchConnAssignments = useCallback(async () => {
-    try {
-      const weekParam = buildWeekOptions().length > 0 ? `&week=${buildWeekOptions()[0].weekStart}` : "";
-      const res = await authFetch(`/api/connection-assignments?month=${selectedMonth}${weekParam}`);
-      if (res.ok) {
-        const data = await res.json();
-        setConnAssignments(data.entries || []);
-        setConnAssignmentTotals(data.totals || []);
-      }
-    } catch {
-      // ignore
-    }
-  }, [authFetch, selectedMonth]);
   }, [authFetch, selectedMonth]);
 
   const fetchConnectionTeam = useCallback(async () => {
@@ -1203,7 +1269,6 @@ export default function ShiftSchedulerPage() {
   };
 
   // ===== Connection Assignments Actions =====
-
   const addAssignment = async () => {
     if (!assignEmpId || !assignRegionCovered) {
       toast({ title: "Error", description: "Employee and region are required", variant: "destructive" });
@@ -1349,103 +1414,6 @@ export default function ShiftSchedulerPage() {
     } catch {
       toast({ title: "Error", description: "Failed to delete", variant: "destructive" });
     }
-  };
-
-  // ===== Region-filtered entries — STRICT (use entry.region column directly) =====
-  const monthEntries = entries.filter((e) => e.date.startsWith(selectedMonth));
-  const filteredEntries = selectedRegion === "all" ? monthEntries : monthEntries.filter((e) => e.region === selectedRegion);
-  const regionActiveEmps = employees.filter((e) => e.active && (selectedRegion === "all" || e.region === selectedRegion));
-  const connectionEmpSet = new Set(connectionTeam.filter((ct) => {
-    if (selectedRegion === "all") return true;
-    return ct.region === selectedRegion;
-  }).map((c) => `${c.empName}-${c.weekStart}`));
-
-  // Build connection team lookup by week start date (STRICT region filter)
-  const connectionByWeek = new Map<string, ConnectionTeamEntry>();
-  for (const ct of connectionTeam) {
-    if (selectedRegion === "all" || ct.region === selectedRegion) {
-      connectionByWeek.set(ct.weekStart, ct);
-    }
-  }
-
-  // Calculate connection team hours for each entry (full week hours)
-  const calcConnectionWeekHours = (weekStart: string, weekEnd: string): number => {
-    if (!settings) return 0;
-    let total = 0;
-    const start = new Date(weekStart + "T00:00:00");
-    const end = new Date(weekEnd + "T00:00:00");
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      // Check dayHours override first
-      if (settings.dayHours && settings.dayHours[dateStr] !== undefined) {
-        total += settings.dayHours[dateStr];
-      } else {
-        const jsDay = d.getDay();
-        let dayType = "Weekday";
-        if (jsDay === 6) dayType = "Saturday";
-        else if (jsDay === 5) dayType = "Friday";
-        else if (jsDay === 4) dayType = "Thursday";
-        const isHol = settings.holidays?.includes(dateStr) || false;
-        if (isHol && settings.shifts["Holiday"]) {
-          total += settings.shifts["Holiday"].hours;
-        } else if (settings.summerTime && settings.summerShifts?.[dayType]) {
-          total += settings.summerShifts[dayType].hours;
-        } else {
-          total += settings.shifts[dayType]?.hours || settings.shifts["Weekday"]?.hours || 5;
-        }
-      }
-    }
-    return total;
-  };
-
-  const weekMap = new Map<string, ScheduleEntry[]>();
-  for (const entry of filteredEntries) {
-    const wk = getWeekNumber(entry.date);
-    if (!weekMap.has(wk)) weekMap.set(wk, []);
-    weekMap.get(wk)!.push(entry);
-  }
-
-  const weekGroups: { key: string; entries: ScheduleEntry[]; label: string }[] = [];
-  let weekIndex = 0;
-  for (const [key, weekEntries] of weekMap) {
-    const sorted = weekEntries.sort((a, b) => a.date.localeCompare(b.date));
-    const totalHrs = sorted.reduce((s, e) => s + e.hours, 0);
-    const offPerson = sorted[0]?.offPerson || "N/A";
-    weekGroups.push({
-      key,
-      entries: sorted,
-      label: `Week ${weekIndex + 1}: ${formatDateDisplay(sorted[0].date)} → ${formatDateDisplay(sorted[sorted.length - 1].date)} | ${sorted.length} days | ${totalHrs.toFixed(1)}h | OFF: ${offPerson}`,
-    });
-    weekIndex++;
-  }
-
-  const totalHours = filteredEntries.reduce((s, e) => s + e.hours, 0);
-  const totalDays = filteredEntries.length;
-  const totalHolidays = filteredEntries.filter((e) => e.isHoliday).length;
-  const totalWeeks = weekGroups.length;
-
-  const roleColor = user?.role === "admin" ? "bg-red-500" : user?.role === "editor" ? "bg-amber-500" : "bg-slate-500";
-
-  // ===== Build week options for dialogs =====
-  const buildWeekOptions = () => {
-    const [y, m] = selectedMonth.split("-");
-    const year = Number(y);
-    const month = Number(m);
-    const firstDay = new Date(year, month - 1, 1);
-    const lastDay = new Date(year, month, 0);
-    let d = new Date(firstDay);
-    while (d.getDay() !== 5) d.setDate(d.getDate() - 1);
-    const weeks: { weekStart: string; weekEnd: string }[] = [];
-    while (d <= lastDay) {
-      const ws = new Date(d);
-      const we = new Date(d);
-      we.setDate(we.getDate() + 6);
-      const wsStr = `${ws.getFullYear()}-${String(ws.getMonth() + 1).padStart(2, "0")}-${String(ws.getDate()).padStart(2, "0")}`;
-      const weStr = `${we.getFullYear()}-${String(we.getMonth() + 1).padStart(2, "0")}-${String(we.getDate()).padStart(2, "0")}`;
-      weeks.push({ weekStart: wsStr, weekEnd: weStr });
-      d.setDate(d.getDate() + 7);
-    }
-    return weeks;
   };
 
   // ===== Auth Checking State =====
@@ -2166,251 +2134,4 @@ export default function ShiftSchedulerPage() {
               <div><Label className="text-xs">Password</Label><Input type="password" value={newUserPassword} onChange={(e) => setNewUserPassword(e.target.value)} className="mt-1" /></div>
               <div><Label className="text-xs">Email (optional)</Label><Input type="email" value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} className="mt-1" /></div>
               <div><Label className="text-xs">Role</Label><Select value={newUserRole} onValueChange={setNewUserRole}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="admin">Admin</SelectItem><SelectItem value="editor">Editor</SelectItem><SelectItem value="viewer">Viewer</SelectItem></SelectContent></Select></div>
-              <div><Label className="text-xs">Region</Label><Select value={newUserRegion} onValueChange={setNewUserRegion}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent>{Object.entries(REGIONS).map(([key, label]) => (<SelectItem key={key} value={key}>{label}</SelectItem>))}</SelectContent></Select></div>
-            </div>
-            <DialogFooter><Button variant="outline" onClick={() => setShowAddUser(false)}>Cancel</Button><Button onClick={addUser} className="bg-blue-600 hover:bg-blue-700 text-white">Create User</Button></DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* ===== EDIT USER MODAL ===== */}
-        <Dialog open={!!editingUser} onOpenChange={() => setEditingUser(null)}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader><DialogTitle>Edit User: {editingUser?.username}</DialogTitle></DialogHeader>
-            <div className="space-y-3 mt-2">
-              <div><Label className="text-xs">Email</Label><Input value={editUserEmail} onChange={(e) => setEditUserEmail(e.target.value)} className="mt-1" /></div>
-              <div><Label className="text-xs">Role</Label><Select value={editUserRole} onValueChange={setEditUserRole}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="admin">Admin</SelectItem><SelectItem value="editor">Editor</SelectItem><SelectItem value="viewer">Viewer</SelectItem></SelectContent></Select></div>
-              <div><Label className="text-xs">Region</Label><Select value={editUserRegion} onValueChange={setEditUserRegion}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent>{Object.entries(REGIONS).map(([key, label]) => (<SelectItem key={key} value={key}>{label}</SelectItem>))}</SelectContent></Select></div>
-            </div>
-            <DialogFooter><Button variant="outline" onClick={() => setEditingUser(null)}>Cancel</Button><Button onClick={saveUserEdit} className="bg-blue-600 hover:bg-blue-700 text-white">Save Changes</Button></DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* ===== RESET PASSWORD MODAL ===== */}
-        <Dialog open={showResetPw} onOpenChange={setShowResetPw}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader><DialogTitle>Reset Password for {users.find((u) => u.id === resetPwUserId)?.username}</DialogTitle></DialogHeader>
-            <div className="space-y-3 mt-2">
-              <div><Label className="text-xs">New Password</Label><Input type="password" value={resetPwNewPassword} onChange={(e) => setResetPwNewPassword(e.target.value)} className="mt-1" /></div>
-            </div>
-            <DialogFooter><Button variant="outline" onClick={() => setShowResetPw(false)}>Cancel</Button><Button onClick={resetUserPassword} className="bg-blue-600 hover:bg-blue-700 text-white">Reset Password</Button></DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* ===== DELETE CONFIRM MODAL ===== */}
-        <Dialog open={!!deletingUser} onOpenChange={() => setDeletingUser(null)}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader><DialogTitle>Delete User</DialogTitle></DialogHeader>
-            <p className="text-sm text-slate-600 dark:text-slate-300 mt-2">Are you sure you want to delete <strong>{deletingUser?.username}</strong>? This action cannot be undone.</p>
-            <DialogFooter><Button variant="outline" onClick={() => setDeletingUser(null)}>Cancel</Button><Button onClick={() => removeUser(deletingUser!)} className="bg-red-600 hover:bg-red-700 text-white">Delete User</Button></DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* ===== ADD CONNECTION TEAM MODAL ===== */}
-        <Dialog open={showAddConnection} onOpenChange={setShowAddConnection}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader><DialogTitle className="flex items-center gap-2"><Link2 className="h-5 w-5" /> تعيين تيم الكونكشن</DialogTitle><DialogDescription>Assign a Connection Team member for a specific week</DialogDescription></DialogHeader>
-            <div className="space-y-3 mt-2">
-              <div><Label className="text-xs">Week</Label>
-                <Select value={String(connWeekIdx)} onValueChange={(v) => setConnWeekIdx(Number(v))}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {buildWeekOptions().map((w, i) => (
-                      <SelectItem key={i} value={String(i)}>{formatDateDisplay(w.weekStart)} → {formatDateDisplay(w.weekEnd)}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div><Label className="text-xs">Employee</Label>
-                <Select value={connEmpIdx} onValueChange={setConnEmpIdx}>
-                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select employee" /></SelectTrigger>
-                  <SelectContent>{regionActiveEmps.map((emp, idx) => (
-                    <SelectItem key={emp.id} value={String(idx)}>{emp.name} ({emp.hrid})</SelectItem>
-                  ))}</SelectContent>
-                </Select>
-              </div>
-              {connEmpIdx !== "" && (() => {
-                const weeks = buildWeekOptions();
-                const week = weeks[connWeekIdx];
-                if (week && settings) {
-                  const totalHrs = calcConnectionWeekHours(week.weekStart, week.weekEnd);
-                  return (
-                    <div className="bg-teal-50 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-800 rounded-lg p-3">
-                      <div className="flex items-center gap-2 text-sm font-semibold text-teal-700 dark:text-teal-300">
-                        <Clock className="h-4 w-4" />
-                        Total Week Hours: {totalHrs.toFixed(1)}h
-                      </div>
-                      <p className="text-xs text-teal-600 dark:text-teal-400 mt-1">
-                        Working all 7 days: {formatDateDisplay(week.weekStart)} → {formatDateDisplay(week.weekEnd)}
-                      </p>
-                    </div>
-                  );
-                }
-                return null;
-              })()}
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setShowAddConnection(false)}>Cancel</Button>
-              {(() => {
-                const weeks = buildWeekOptions();
-                const week = weeks[connWeekIdx];
-                const existingConn = week ? connectionTeam.find(ct => ct.weekStart === week.weekStart) : null;
-                return existingConn ? (
-                  <Button onClick={() => { setConnReplaceFrom(existingConn.empName); setConnReplaceTo(""); setConnReplaceWeekIdx(connWeekIdx); setConnReplaceHours(""); setShowAddConnection(false); setShowConnReplace(true); }} className="bg-amber-600 hover:bg-amber-700 text-white">Replace (Current: {existingConn.empName})</Button>
-                ) : (
-                  <Button onClick={addConnectionPerson} className="bg-teal-600 hover:bg-teal-700 text-white">Assign</Button>
-                );
-              })()}
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* ===== TRANSFER CONNECTION HOURS MODAL ===== */}
-        <Dialog open={showConnReplace} onOpenChange={setShowConnReplace}>
-          <DialogContent className="max-w-md">
-            <DialogHeader><DialogTitle className="flex items-center gap-2"><ArrowLeftRight className="h-5 w-5" /> تبديل تيم الكونكشن</DialogTitle><DialogDescription>Replace a Connection Team member for a specific week</DialogDescription></DialogHeader>
-            <div className="space-y-3 mt-2">
-              <div><Label className="text-xs">Week (with existing Connection Team assignment)</Label>
-                <Select value={String(connReplaceWeekIdx)} onValueChange={(v) => {
-                  const newIdx = Number(v);
-                  setConnReplaceWeekIdx(newIdx);
-                  const weeks = buildWeekOptions();
-                  const week = weeks[newIdx];
-                  const existing = week ? connectionTeam.find(ct => ct.weekStart === week.weekStart) : undefined;
-                  if (existing) {
-                    setConnReplaceFrom(existing.empName);
-                    setConnReplaceHours(String(calcConnectionWeekHours(existing.weekStart, existing.weekEnd)));
-                  } else {
-                    setConnReplaceFrom("");
-                    setConnReplaceHours("");
-                  }
-                  setConnReplaceTo("");
-                }}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {buildWeekOptions().filter((w) => connectionTeam.some(ct => ct.weekStart === w.weekStart)).map((w, i) => {
-                      const actualIdx = buildWeekOptions().findIndex(wo => wo.weekStart === w.weekStart);
-                      const ct = connectionTeam.find(c => c.weekStart === w.weekStart);
-                      return (<SelectItem key={actualIdx} value={String(actualIdx)}>{formatDateDisplay(w.weekStart)} → {formatDateDisplay(w.weekEnd)} ({ct?.empName})</SelectItem>);
-                    })}
-                  </SelectContent>
-                </Select>
-                {buildWeekOptions().filter((w) => connectionTeam.some(ct => ct.weekStart === w.weekStart)).length === 0 && (
-                  <p className="text-xs text-slate-400 mt-1 italic">No Connection Team assignments found for this month.</p>
-                )}
-              </div>
-              {connReplaceFrom && (
-                <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3">
-                  <div className="text-xs font-medium text-amber-700 dark:text-amber-300">Current Connection Team Member:</div>
-                  <div className="text-sm font-semibold text-amber-800 dark:text-amber-200 mt-0.5">{connReplaceFrom} {connReplaceHours && <span className="text-xs font-normal text-amber-600">({Number(connReplaceHours).toFixed(1)}h)</span>}</div>
-                </div>
-              )}
-              <div><Label className="text-xs">Transfer to Employee</Label>
-                <Select value={connReplaceTo} onValueChange={setConnReplaceTo}>
-                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select target employee" /></SelectTrigger>
-                  <SelectContent>{regionActiveEmps.filter((e) => e.name !== connReplaceFrom).map((emp) => (
-                    <SelectItem key={emp.id} value={emp.name}>{emp.name} ({emp.hrid})</SelectItem>
-                  ))}</SelectContent>
-                </Select>
-              </div>
-              {connReplaceTo && connReplaceHours && (
-                <div className="bg-teal-50 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-800 rounded-lg p-3">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-teal-700 dark:text-teal-300">
-                    <Clock className="h-4 w-4" />
-                    Transfer: {Number(connReplaceHours).toFixed(1)}h from {connReplaceFrom} → {connReplaceTo}
-                  </div>
-                </div>
-              )}
-            </div>
-            <DialogFooter><Button variant="outline" onClick={() => setShowConnReplace(false)}>Cancel</Button><Button onClick={replaceConnectionPerson} disabled={!connReplaceTo || !connReplaceFrom} className="bg-teal-600 hover:bg-teal-700 text-white">Transfer &amp; Replace</Button></DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* ===== ADD REGION ROTATION MODAL ===== */}
-        <Dialog open={showAddRotation} onOpenChange={setShowAddRotation}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader><DialogTitle className="flex items-center gap-2"><RotateCcw className="h-5 w-5" /> Add Region Rotation</DialogTitle><DialogDescription>Add a region rotation entry</DialogDescription></DialogHeader>
-            <div className="space-y-3 mt-2">
-              <div><Label className="text-xs">Region</Label>
-                <Select value={rotRegion} onValueChange={setRotRegion}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(REGIONS).filter(([k]) => k !== "all").map(([key, label]) => (
-                      <SelectItem key={key} value={key}>{label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div><Label className="text-xs">Target Area</Label><Input value={rotTargetArea} onChange={(e) => setRotTargetArea(e.target.value)} className="mt-1" placeholder="e.g., New Branch" /></div>
-              <div><Label className="text-xs">Week</Label>
-                <Select value={String(rotWeekIdx)} onValueChange={(v) => setRotWeekIdx(Number(v))}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {buildWeekOptions().map((w, i) => (
-                      <SelectItem key={i} value={String(i)}>{formatDateDisplay(w.weekStart)} → {formatDateDisplay(w.weekEnd)}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div><Label className="text-xs">Notes (optional)</Label><Input value={rotNotes} onChange={(e) => setRotNotes(e.target.value)} className="mt-1" placeholder="Any notes..." /></div>
-            </div>
-            <DialogFooter><Button variant="outline" onClick={() => setShowAddRotation(false)}>Cancel</Button><Button onClick={addRotation} className="bg-orange-600 hover:bg-orange-700 text-white">Add Rotation</Button></DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* ===== ADD CONNECTION ASSIGNMENT MODAL ===== */}
-        <Dialog open={showAddAssignment} onOpenChange={setShowAddAssignment}>
-          <DialogContent className="max-w-sm">
-            <DialogHeader><DialogTitle className="flex items-center gap-2"><ClipboardList className="h-5 w-5" /> New Connection Assignment</DialogTitle><DialogDescription>Assign an employee to cover a region for a week</DialogDescription></DialogHeader>
-            <div className="space-y-3 mt-2">
-              <div><Label className="text-xs">Employee</Label>
-                <Select value={assignEmpId} onValueChange={setAssignEmpId}>
-                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select employee" /></SelectTrigger>
-                  <SelectContent>{regionActiveEmps.map((emp) => (
-                    <SelectItem key={emp.id} value={String(emp.id)}>{emp.name} ({emp.hrid})</SelectItem>
-                  ))}</SelectContent>
-                </Select>
-              </div>
-              <div><Label className="text-xs">Region Covered</Label>
-                <Select value={assignRegionCovered} onValueChange={setAssignRegionCovered}>
-                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select region" /></SelectTrigger>
-                  <SelectContent>{Object.entries(REGIONS).filter(([k]) => k !== "all").map(([key, label]) => (
-                    <SelectItem key={key} value={key}>{label}</SelectItem>
-                  ))}</SelectContent>
-                </Select>
-              </div>
-              <div><Label className="text-xs">Week</Label>
-                <Select value={String(assignWeekIdx)} onValueChange={(v) => setAssignWeekIdx(Number(v))}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>{buildWeekOptions().map((w, i) => (
-                    <SelectItem key={i} value={String(i)}>{formatDateDisplay(w.weekStart)} → {formatDateDisplay(w.weekEnd)}</SelectItem>
-                  ))}</SelectContent>
-                </Select>
-              </div>
-              <div><Label className="text-xs">Split</Label>
-                <Select value={assignSplit} onValueChange={(v) => setAssignSplit(v as "full" | "first_half" | "second_half")}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="full">Full Week (7 days)</SelectItem>
-                    <SelectItem value="first_half">First Half (Fri-Sun)</SelectItem>
-                    <SelectItem value="second_half">Second Half (Mon-Thu)</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-[10px] text-slate-400 mt-1">
-                  {assignSplit === "full" && "Assigns employee for all 7 days of the week"}
-                  {assignSplit === "first_half" && "Assigns for Friday, Saturday, Sunday only"}
-                  {assignSplit === "second_half" && "Assigns for Monday, Tuesday, Wednesday, Thursday only"}
-                </p>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div><Label className="text-xs">Hours (daily)</Label><Input type="number" step="0.5" min="0" value={assignHours} onChange={(e) => setAssignHours(e.target.value)} className="mt-1" placeholder="e.g. 5" /></div>
-                <div><Label className="text-xs">Override Hours</Label><Input type="number" step="0.5" min="0" value={assignOverrideHours} onChange={(e) => setAssignOverrideHours(e.target.value)} className="mt-1" placeholder="0 = use default" /></div>
-              </div>
-              <p className="text-[10px] text-slate-400">Override hours take priority over default hours if set.</p>
-            </div>
-            <DialogFooter><Button variant="outline" onClick={() => setShowAddAssignment(false)}>Cancel</Button><Button onClick={addAssignment} disabled={!assignEmpId || !assignRegionCovered} className="bg-violet-600 hover:bg-violet-700 text-white">Assign</Button></DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </div>
-    </TooltipProvider>
-  );
-}
+              <div><
