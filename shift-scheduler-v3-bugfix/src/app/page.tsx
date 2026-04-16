@@ -474,6 +474,7 @@ export default function ShiftSchedulerPage() {
       entries: sorted,
       label: `Week ${weekIndex + 1}: ${formatDateDisplay(sorted[0].date)} → ${formatDateDisplay(sorted[sorted.length - 1].date)} | ${sorted.length} days | ${totalHrs.toFixed(1)}h | OFF: ${offPerson}`,
     });
+    weekIndex++;
   }
 
   const totalHours = filteredEntries.reduce((s, e) => s + e.hours, 0);
