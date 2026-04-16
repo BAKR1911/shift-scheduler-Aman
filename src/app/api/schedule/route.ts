@@ -32,7 +32,11 @@ export async function GET(request: NextRequest) {
       orderBy: { date: "asc" },
     });
 
-    const genMonths = await db.generatedMonth.findMany({ orderBy: { monthKey: "asc" } });
+    const genMonthsWhere: Record<string, unknown> = {};
+    if (effectiveRegion && effectiveRegion !== "all") {
+      genMonthsWhere.region = effectiveRegion;
+    }
+    const genMonths = await db.generatedMonth.findMany({ where: genMonthsWhere, orderBy: { monthKey: "asc" } });
 
     const filteredEntries = dbEntries.map((e) => ({
       date: e.date,
@@ -127,9 +131,13 @@ export async function POST(request: NextRequest) {
     if (effectiveRegion !== "all") {
       regionWhereClause.region = effectiveRegion;
     }
+    const genMonthsWhere: Record<string, unknown> = {};
+    if (effectiveRegion !== "all") {
+      genMonthsWhere.region = effectiveRegion;
+    }
     const [existingDbEntries, genMonths] = await Promise.all([
       db.scheduleEntry.findMany({ where: regionWhereClause, orderBy: { date: "asc" } }),
-      db.generatedMonth.findMany({ orderBy: { monthKey: "asc" } }),
+      db.generatedMonth.findMany({ where: genMonthsWhere, orderBy: { monthKey: "asc" } }),
     ]);
     const existingGenMonths = genMonths.map((g) => g.monthKey);
 
@@ -239,7 +247,7 @@ export async function POST(request: NextRequest) {
 
       // Record generated month
       if (!existingGenMonths.includes(monthKey)) {
-        await db.generatedMonth.create({ data: { monthKey } });
+        await db.generatedMonth.create({ data: { monthKey, region: effectiveRegion } });
       }
 
       return NextResponse.json({
@@ -295,7 +303,7 @@ export async function POST(request: NextRequest) {
       // Record generated months
       for (const mk of newMonthKeys) {
         if (!existingGenMonths.includes(mk)) {
-          await db.generatedMonth.create({ data: { monthKey: mk } });
+          await db.generatedMonth.create({ data: { monthKey: mk, region: effectiveRegion } });
         }
       }
 
@@ -343,11 +351,13 @@ export async function DELETE(request: NextRequest) {
       if (ids.length > 0) {
         await db.scheduleEntry.deleteByIds(ids);
       }
+      await db.generatedMonth.deleteByMonthAndRegion(month, deleteRegion);
       return NextResponse.json({ success: true, deleted: ids.length });
     }
 
     // Admin with region=all can clear all regions
     const deleted = await db.scheduleEntry.deleteByMonth(month);
+    await db.generatedMonth.deleteByMonth(month);
     return NextResponse.json({ success: true, deleted: deleted.count });
   } catch (error) {
     console.error("Error clearing schedule:", error);
