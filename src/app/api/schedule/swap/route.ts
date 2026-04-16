@@ -10,25 +10,15 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { empIdxA, empIdxB, monthKey, region } = body;
+    const { empIdxA, empIdxB, monthKey } = body;
 
     if (empIdxA === undefined || empIdxB === undefined || !monthKey) {
       return NextResponse.json({ error: "empIdxA, empIdxB, and monthKey are required" }, { status: 400 });
     }
 
-    // Determine effective region
-    let effectiveRegion = region || "all";
-    if (auth.region && auth.region !== "all") {
-      effectiveRegion = auth.region;
-    }
-
     // Get all entries for the month
-    const whereClause: Record<string, unknown> = { date: { startsWith: monthKey } };
-    if (effectiveRegion !== "all") {
-      whereClause.region = effectiveRegion;
-    }
     const entries = await db.scheduleEntry.findMany({
-      where: whereClause,
+      where: { date: { startsWith: monthKey } },
       orderBy: { date: "asc" },
     });
 

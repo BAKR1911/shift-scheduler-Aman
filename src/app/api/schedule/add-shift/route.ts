@@ -22,14 +22,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "date, empIdx, and empName are required" }, { status: 400 });
     }
 
-    // Check if entry already exists for this region
-    const existWhere: Record<string, unknown> = { date };
-    if (effectiveRegion && effectiveRegion !== "all") {
-      existWhere.region = effectiveRegion;
-    }
-    const existing = await db.scheduleEntry.findFirst({ where: existWhere });
+    // Check if entry already exists
+    const existing = await db.scheduleEntry.findFirst({ where: { date } });
     if (existing) {
-      return NextResponse.json({ error: `An entry already exists for this date${effectiveRegion && effectiveRegion !== "all" ? ` in ${effectiveRegion}` : ""}` }, { status: 400 });
+      return NextResponse.json({ error: "An entry already exists for this date" }, { status: 400 });
     }
 
     const entry = await db.scheduleEntry.create({

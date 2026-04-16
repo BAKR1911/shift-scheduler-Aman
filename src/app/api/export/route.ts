@@ -30,9 +30,7 @@ export async function POST(request: NextRequest) {
     // Fetch data from store
     const dbEmployees = await db.employee.findMany({ orderBy: { order: "asc" } });
     const dbSettings = await db.settings.findUnique();
-    const genMonths = effectiveRegion !== "all"
-      ? await db.generatedMonth.findMany({ where: { region: effectiveRegion }, orderBy: { monthKey: "asc" } })
-      : await db.generatedMonth.findMany({ orderBy: { monthKey: "asc" } });
+    const genMonths = await db.generatedMonth.findMany({ orderBy: { monthKey: "asc" } });
 
     // Filter employees by region
     let employees = dbEmployees.map((e) => ({
@@ -506,7 +504,7 @@ export async function POST(request: NextRequest) {
     [5, 24, 12, 14, 14, 14, 14, 14].forEach((w, i) => ws4.getColumn(i + 1).width = w);
 
     ws4.mergeCells("A1:H1");
-    ws4.getCell("A1").value = `IT Helpdesk - Cumulative Balance${regionLabel ? ` (${effectiveRegion})` : " (All Months)"}`;
+    ws4.getCell("A1").value = "IT Helpdesk - Cumulative Balance (All Months)";
     ws4.getCell("A1").font = { size: 16, bold: true, color: { argb: PRIMARY } };
     ws4.getRow(1).height = 36;
 

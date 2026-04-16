@@ -14,17 +14,7 @@ export async function DELETE(
   try {
     const { date } = await params;
 
-    const region = request.nextUrl.searchParams.get("region") || "";
-    let effectiveRegion = region;
-    if (!effectiveRegion && auth.region && auth.region !== "all") {
-      effectiveRegion = auth.region;
-    }
-
-    const deleteWhere: Record<string, unknown> = { date };
-    if (effectiveRegion && effectiveRegion !== "all") {
-      deleteWhere.region = effectiveRegion;
-    }
-    const deleted = await db.scheduleEntry.deleteMany({ where: deleteWhere });
+    const deleted = await db.scheduleEntry.deleteMany({ where: { date } });
 
     return NextResponse.json({ success: true, deleted: deleted.count });
   } catch (error) {
