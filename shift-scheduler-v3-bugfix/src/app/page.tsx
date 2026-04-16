@@ -1,6 +1,5 @@
 "use client";
 
-export const dynamic = 'force-dynamic';
   }, [authFetch, selectedMonth]);
 
   // Check auth on mount
