@@ -494,42 +494,6 @@ export default function ShiftSchedulerPage() {
     }
   }, [authFetch, selectedMonth]);
 
-  // ===== Build week options for dialogs =====
-  const buildWeekOptions = () => {
-    const [y, m] = selectedMonth.split("-");
-    const year = Number(y);
-    const month = Number(m);
-    const firstDay = new Date(year, month - 1, 1);
-    const lastDay = new Date(year, month, 0);
-    let d = new Date(firstDay);
-    while (d.getDay() !== 5) d.setDate(d.getDate() - 1);
-    const weeks: { weekStart: string; weekEnd: string }[] = [];
-    while (d <= lastDay) {
-      const ws = new Date(d);
-      const we = new Date(d);
-      we.setDate(we.getDate() + 6);
-      const wsStr = `${ws.getFullYear()}-${String(ws.getMonth() + 1).padStart(2, "0")}-${String(ws.getDate()).padStart(2, "0")}`;
-      const weStr = `${we.getFullYear()}-${String(we.getMonth() + 1).padStart(2, "0")}-${String(we.getDate()).padStart(2, "0")}`;
-      weeks.push({ weekStart: wsStr, weekEnd: weStr });
-      d.setDate(d.getDate() + 7);
-    }
-    return weeks;
-  };
-
-  const fetchConnAssignments = useCallback(async () => {
-    try {
-      const weekParam = buildWeekOptions().length > 0 ? `&week=${buildWeekOptions()[0].weekStart}` : "";
-      const res = await authFetch(`/api/connection-assignments?month=${selectedMonth}${weekParam}`);
-      if (res.ok) {
-        const data = await res.json();
-        setConnAssignments(data.entries || []);
-        setConnAssignmentTotals(data.totals || []);
-      }
-    } catch {
-      // ignore
-    }
-  }, [authFetch, selectedMonth]);
-
   // Check auth on mount
   useEffect(() => {
     const check = async () => {
@@ -1188,6 +1152,20 @@ export default function ShiftSchedulerPage() {
   };
 
   // ===== Connection Assignments Actions =====
+  const fetchConnAssignments = useCallback(async () => {
+    try {
+      const weekParam = buildWeekOptions().length > 0 ? `&week=${buildWeekOptions()[0].weekStart}` : "";
+      const res = await authFetch(`/api/connection-assignments?month=${selectedMonth}${weekParam}`);
+      if (res.ok) {
+        const data = await res.json();
+        setConnAssignments(data.entries || []);
+        setConnAssignmentTotals(data.totals || []);
+      }
+    } catch {
+      // ignore
+    }
+  }, [authFetch, selectedMonth]);
+
   const addAssignment = async () => {
     if (!assignEmpId || !assignRegionCovered) {
       toast({ title: "Error", description: "Employee and region are required", variant: "destructive" });
@@ -1409,6 +1387,28 @@ export default function ShiftSchedulerPage() {
   const totalWeeks = weekGroups.length;
 
   const roleColor = user?.role === "admin" ? "bg-red-500" : user?.role === "editor" ? "bg-amber-500" : "bg-slate-500";
+
+  // ===== Build week options for dialogs =====
+  const buildWeekOptions = () => {
+    const [y, m] = selectedMonth.split("-");
+    const year = Number(y);
+    const month = Number(m);
+    const firstDay = new Date(year, month - 1, 1);
+    const lastDay = new Date(year, month, 0);
+    let d = new Date(firstDay);
+    while (d.getDay() !== 5) d.setDate(d.getDate() - 1);
+    const weeks: { weekStart: string; weekEnd: string }[] = [];
+    while (d <= lastDay) {
+      const ws = new Date(d);
+      const we = new Date(d);
+      we.setDate(we.getDate() + 6);
+      const wsStr = `${ws.getFullYear()}-${String(ws.getMonth() + 1).padStart(2, "0")}-${String(ws.getDate()).padStart(2, "0")}`;
+      const weStr = `${we.getFullYear()}-${String(we.getMonth() + 1).padStart(2, "0")}-${String(we.getDate()).padStart(2, "0")}`;
+      weeks.push({ weekStart: wsStr, weekEnd: weStr });
+      d.setDate(d.getDate() + 7);
+    }
+    return weeks;
+  };
 
   // ===== Auth Checking State =====
   if (authChecking) {
