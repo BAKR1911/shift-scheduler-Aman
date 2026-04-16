@@ -1,7 +1,9 @@
 "use client";
 
 export const dynamic = 'force-dynamic';
+  }, [authFetch, selectedMonth]);
 
+  // Check auth on mount
 
 import React, { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
