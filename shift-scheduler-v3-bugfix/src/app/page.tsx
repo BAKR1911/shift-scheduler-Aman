@@ -1,10 +1,3 @@
-تم حل المشكلة عن طريق إعادة ترتيب الكود. الخطأ `ReferenceError: Cannot access 'c6' before initialization` كان يحدث لأن المتغيرات المحسوبة (مثل `regionActiveEmps` و `filteredEntries`) كانت معرفة في نهاية الملف (أسفل الكود)، ولكن كانت دوال التعامل مع الأحداث (مثل `addConnectionPerson`) تستخدمها في الأعلى، مما يسبب خطأ في ترتيب التهيئة عند بناء المشروع.
-
-تم نقل كتلة البيانات المحسوبة (Computed State) إلى أعلى المكون، بعد تعريف الـ `State` وقبل تعريف الدوال، لضمان توفرها عند استخدامها.
-
-إليك الملف الكامل بعد التعديل:
-
-```tsx
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
