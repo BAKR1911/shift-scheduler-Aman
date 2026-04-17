@@ -31,6 +31,7 @@ export interface Settings {
   shifts: Record<string, ShiftConfig>;
   weekStart: string;
   holidays: string[];
+  holidayHours?: Record<string, number>; // Custom hours deduction for each holiday date
   summerTime?: boolean;
   summerShifts?: Record<string, ShiftConfig>;
   dayHours?: Record<string, number>;
@@ -99,24 +100,45 @@ function shiftForType(dayType: string, settings: Settings, isHoliday: boolean): 
 }
 
 /**
- * Get hours for a specific date. Checks dayHours first, then falls back to shift config.
+ * Get hours for a specific date. Checks holidayHours first (for holidays), then dayHours, then falls back to shift config.
  */
 export function getHoursForDate(dateStr: string, settings: Settings, isHoliday: boolean): number {
+  // For holidays, use custom holiday deduction hours if set, otherwise return 0 (no work on holidays)
+  if (isHoliday) {
+    if (settings.holidayHours && settings.holidayHours[dateStr] !== undefined) {
+      return settings.holidayHours[dateStr];
+    }
+    // Default to 0 for holidays (not working days) - user can specify deduction hours in holidayHours
+    return 0;
+  }
+  // Check for custom day hours
   if (settings.dayHours && settings.dayHours[dateStr] !== undefined) {
     return settings.dayHours[dateStr];
   }
-  const shift = shiftForType(getDayType(new Date(dateStr + "T00:00:00")), settings, isHoliday);
+  const shift = shiftForType(getDayType(new Date(dateStr + "T00:00:00")), settings, false);
   return shift.hours;
 }
 
-function getWeeksInMonth(year: number, month: number): Date[][] {
+// Map day names to JS getDay() values (0=Sun, 1=Mon, ..., 5=Fri, 6=Sat)
+const DAY_NAME_TO_JS_DAY: Record<string, number> = {
+  "Sunday": 0,
+  "Monday": 1,
+  "Tuesday": 2,
+  "Wednesday": 3,
+  "Thursday": 4,
+  "Friday": 5,
+  "Saturday": 6,
+};
+
+function getWeeksInMonth(year: number, month: number, weekStart: string = "Friday"): Date[][] {
   const weeks: Date[][] = [];
   const firstDay = new Date(year, month - 1, 1);
   const lastDay = new Date(year, month, 0);
 
-  // Find the first Friday on or before the first day (jsDay === 5)
+  // Find the first week start day on or before the first day
+  const targetDay = DAY_NAME_TO_JS_DAY[weekStart] ?? 5; // Default to Friday if not found
   let d = new Date(firstDay);
-  while (d.getDay() !== 5) {
+  while (d.getDay() !== targetDay) {
     d.setDate(d.getDate() - 1);
   }
 
@@ -202,7 +224,7 @@ export function generateScheduleForMonth(
 
   const cumStats = initializeCumStats(n, existingCumStats);
 
-  const weeks = getWeeksInMonth(year, month);
+  const weeks = getWeeksInMonth(year, month, settings.weekStart);
   if (weeks.length === 0) {
     return { entries: [], localStats: {}, cumulativeStats: cumStats, weekOffMap: {} };
   }
@@ -261,6 +283,13 @@ export function generateScheduleForMonth(
       sc -= (cs?.totalHours || 0) * 2;
       sc -= (ls?.hours || 0) * 3;
 
+      // HEAVY DAYS BONUS: Extra weight for Friday/Saturday hours
+      // Employees who worked more Friday/Saturday hours should be prioritized for OFF
+      const cumHeavyHours = (cs?.fridays || 0) * 9 + (cs?.saturdays || 0) * 9; // Assuming 9 hours per heavy day
+      const localHeavyHours = (ls?.fri || 0) * 9 + (ls?.sat || 0) * 9;
+      sc -= cumHeavyHours * 1.5; // Extra weight for heavy days
+      sc -= localHeavyHours * 2; // Stronger weight for current month heavy days
+
       // STRONG penalty for recently off (prevents consecutive weeks)
       if (recentlyOff.has(ei)) {
         sc += 10000; // Very strong penalty
@@ -299,10 +328,20 @@ export function generateScheduleForMonth(
       const hrs = getHoursForDate(dateStr, settings, isHoliday);
 
       // Build eligible list with rest constraint
+      // RULE: No employee should work two consecutive days (except in extreme necessity)
+      // First try employees with at least 1 day gap (gap >= 2)
       let eligible = workers.filter((ei) => {
         const gap = globalDayCounter - localStats[ei].lastDayIdx;
-        return gap >= 1;
+        return gap >= 2;
       });
+      // If no eligible employees (extreme necessity), allow those with gap >= 1
+      if (eligible.length === 0) {
+        eligible = workers.filter((ei) => {
+          const gap = globalDayCounter - localStats[ei].lastDayIdx;
+          return gap >= 1;
+        });
+      }
+      // If still no eligible employees, use all workers (fallback)
       if (eligible.length === 0) eligible = [...workers];
 
       // Multi-factor scoring (lower = better candidate)
@@ -527,22 +566,57 @@ export function generateScheduleForWeek(
 
 /**
  * Recalculate hours for existing schedule entries (e.g., after settings change).
+ * IMPORTANT: Holidays are determined dynamically from settings.holidays (NOT from isHoliday flag).
  */
 export function recalcScheduleHours(
   entries: ScheduleEntry[],
   settings: Settings
 ): ScheduleEntry[] {
-  return entries.map((entry) => {
+  console.log("[recalcScheduleHours] Input:", {
+    entriesCount: entries.length,
+    holidaysInSettings: settings.holidays,
+    holidayHours: settings.holidayHours,
+  });
+
+  // Create a holiday set for quick lookup
+  const holidaySet = new Set(settings.holidays || []);
+
+  const result = entries.map((entry) => {
     if (entry.isManual) return entry;
-    const shift = shiftForType(entry.dayType, settings, entry.isHoliday);
-    const hrs = getHoursForDate(entry.date, settings, entry.isHoliday);
+
+    // DETERMINE HOLIDY STATUS DYNAMICALLY FROM SETTINGS
+    const isHolidayDynamic = holidaySet.has(entry.date);
+
+    // Holidays = 0 hours (not working days)
+    if (isHolidayDynamic) {
+      console.log(`[recalcScheduleHours] Holiday ${entry.date}:`, {
+        isHolidayDynamic,
+        // Hours will be 0 for holidays
+        // holidayHours is used for deduction display, not as actual work hours
+      });
+      const zeroShift: ShiftConfig = { start: "00:00 AM", end: "00:00 AM", hours: 0 };
+      return {
+        ...entry,
+        start: zeroShift.start,
+        end: zeroShift.end,
+        hours: 0, // HOLIDAYS: 0 hours (not working)
+        isHoliday: isHolidayDynamic, // Update the flag to match settings
+      };
+    }
+
+    const shift = shiftForType(entry.dayType, settings, false);
+    const hrs = getHoursForDate(entry.date, settings, false);
     return {
       ...entry,
       start: shift.start,
       end: shift.end,
       hours: hrs,
+      isHoliday: false, // Update the flag to match settings
     };
   });
+
+  console.log("[recalcScheduleHours] Output - holiday entries:", result.filter(e => holidaySet.has(e.date)).map(e => ({ date: e.date, hours: e.hours, isHoliday: e.isHoliday })));
+  return result;
 }
 
 /**
@@ -598,10 +672,10 @@ export function getWeekKey(dateStr: string): string {
 }
 
 /**
- * Get weeks in a specific month (Friday-based).
+ * Get weeks in a specific month (configurable week start).
  */
-export function getMonthWeeks(year: number, month: number): { weekStart: string; weekEnd: string }[] {
-  const weeks = getWeeksInMonth(year, month);
+export function getMonthWeeks(year: number, month: number, weekStart: string = "Friday"): { weekStart: string; weekEnd: string }[] {
+  const weeks = getWeeksInMonth(year, month, weekStart);
   return weeks.map((weekDays) => ({
     weekStart: formatDate(weekDays[0]),
     weekEnd: formatDate(weekDays[6]),

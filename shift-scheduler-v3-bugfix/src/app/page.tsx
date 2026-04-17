@@ -21,7 +21,7 @@ import {
   CalendarDays, Clock, Sun, Moon, X, ArrowLeftRight, AlertTriangle,
   CheckCircle, Info, ChevronDown, ChevronUp, FileSpreadsheet, BarChart3,
   Sparkles, Eye, EyeOff, LogOut, User, Shield, KeyRound, Lock, HeadphonesIcon,
-  Pencil, Download, UserCog, Link2, MapPin, RotateCcw, ClipboardList
+  Pencil, Download, UserCog, Link2, MapPin, RotateCcw, ClipboardList, Search
 } from "lucide-react";
 import { computeLocalStats, computeOffWeeks, recalcScheduleHours } from "@/lib/scheduler";
 
@@ -32,6 +32,7 @@ interface Employee {
   hrid: string;
   active: boolean;
   region: string;
+  teamType: string;
 }
 
 interface ShiftConfig {
@@ -44,6 +45,7 @@ interface SettingsData {
   shifts: Record<string, ShiftConfig>;
   weekStart: string;
   holidays: string[];
+  holidayHours: Record<string, number>; // Custom hours deduction for each holiday date
   summerTime: boolean;
   summerShifts: Record<string, ShiftConfig>;
   dayHours: Record<string, number>;
@@ -154,9 +156,15 @@ interface ConnectionAssignmentTotals {
 // ===== Region helpers =====
 const REGIONS: Record<string, string> = {
   all: "All Regions",
-  cairo: "Cairo (القاهرة)",
-  delta: "Delta (الدلتا)",
-  upper_egypt: "Upper Egypt (الصعيد)",
+  cairo: "Cairo",
+  delta: "Delta",
+  upper_egypt: "Upper Egypt",
+};
+
+// ===== Team Type helpers =====
+const TEAM_TYPES: Record<string, string> = {
+  helpdesk: "Helpdesk",
+  connection: "Connection",
 };
 
 // ===== Helpers =====
@@ -188,6 +196,24 @@ function formatDateDisplay(dateStr: string): string {
 function formatHolidayDisplay(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
   return d.toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" });
+}
+
+// Get default holiday hours deduction based on weekday
+function getDefaultHolidayHours(dateStr: string, settings: SettingsData | null): number {
+  const d = new Date(dateStr + "T00:00:00");
+  const dayName = d.toLocaleDateString("en-US", { weekday: "long" });
+
+  // Use shift hours as default based on weekday
+  if (settings?.shifts) {
+    const shift = settings.shifts[dayName];
+    if (shift) return shift.hours;
+  }
+
+  // Default fallback: 9 hours for Friday/Saturday, 5 hours for other days
+  if (dayName === "Friday" || dayName === "Saturday") {
+    return 9;
+  }
+  return 5;
 }
 
 const MONTHS = [
@@ -307,7 +333,8 @@ export default function ShiftSchedulerPage() {
   });
   const [selectedYear, setSelectedYear] = useState(() => new Date().getFullYear());
   const [generating, setGenerating] = useState(false);
-  const [selectedRegion, setSelectedRegion] = useState<string>("all");
+  const [selectedRegion, setSelectedRegion] = useState<string>("cairo");
+  // Connection team region is always 'all' - no selector needed
 
   // Modals
   const [showSettings, setShowSettings] = useState(false);
@@ -327,8 +354,10 @@ export default function ShiftSchedulerPage() {
   const [editingEmpId, setEditingEmpId] = useState<number | null>(null);
   const [editEmpName, setEditEmpName] = useState("");
   const [editEmpHrid, setEditEmpHrid] = useState("");
-  const [newEmpRegion, setNewEmpRegion] = useState("all");
-  const [editEmpRegion, setEditEmpRegion] = useState("all");
+  const [newEmpRegion, setNewEmpRegion] = useState("cairo");
+  const [editEmpRegion, setEditEmpRegion] = useState("cairo");
+  const [newEmpTeamType, setNewEmpTeamType] = useState("helpdesk");
+  const [editEmpTeamType, setEditEmpTeamType] = useState("");
 
   // Add shift
   const [addShiftDate, setAddShiftDate] = useState("");
@@ -337,6 +366,7 @@ export default function ShiftSchedulerPage() {
   // Settings editing
   const [editSettings, setEditSettings] = useState<SettingsData | null>(null);
   const [newHolidayDate, setNewHolidayDate] = useState("");
+  const [newHolidayHours, setNewHolidayHours] = useState("");
   const [savingSettings, setSavingSettings] = useState(false);
   const [newDayHourDate, setNewDayHourDate] = useState("");
   const [newDayHourValue, setNewDayHourValue] = useState("");
@@ -345,7 +375,12 @@ export default function ShiftSchedulerPage() {
   const [exportSelectedIds, setExportSelectedIds] = useState<number[]>([]);
   const [exportDateFrom, setExportDateFrom] = useState("");
   const [exportDateTo, setExportDateTo] = useState("");
-  const [exportRegion, setExportRegion] = useState<string>("all");
+  const [exportRegion, setExportRegion] = useState<string>("cairo");
+  const [exportType, setExportType] = useState<"helpdesk" | "connection" | "hrid">("helpdesk");
+  const [exportConnectionOnly, setExportConnectionOnly] = useState(false);
+  const [exportHrid, setExportHrid] = useState("");
+  const [exportHridMonthFrom, setExportHridMonthFrom] = useState("");
+  const [exportHridMonthTo, setExportHridMonthTo] = useState("");
   const [exporting, setExporting] = useState(false);
 
   // User management
@@ -355,11 +390,11 @@ export default function ShiftSchedulerPage() {
   const [newUserPassword, setNewUserPassword] = useState("");
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserRole, setNewUserRole] = useState("viewer");
-  const [newUserRegion, setNewUserRegion] = useState("all");
+  const [newUserRegion, setNewUserRegion] = useState("cairo");
   const [editingUser, setEditingUser] = useState<UserMgmt | null>(null);
   const [editUserEmail, setEditUserEmail] = useState("");
   const [editUserRole, setEditUserRole] = useState("viewer");
-  const [editUserRegion, setEditUserRegion] = useState("all");
+  const [editUserRegion, setEditUserRegion] = useState("cairo");
   const [showResetPw, setShowResetPw] = useState(false);
   const [resetPwUserId, setResetPwUserId] = useState("");
   const [resetPwNewPassword, setResetPwNewPassword] = useState("");
@@ -368,14 +403,14 @@ export default function ShiftSchedulerPage() {
   // Connection team
   const [connectionTeam, setConnectionTeam] = useState<ConnectionTeamEntry[]>([]);
   const [showAddConnection, setShowAddConnection] = useState(false);
-  const [connWeekIdx, setConnWeekIdx] = useState(0);
+  const [connWeekStart, setConnWeekStart] = useState("");
+  const [connWeekEnd, setConnWeekEnd] = useState("");
   const [connEmpIdx, setConnEmpIdx] = useState("");
 
   // Connection team replace/transfer
   const [showConnReplace, setShowConnReplace] = useState(false);
   const [connReplaceFrom, setConnReplaceFrom] = useState("");
   const [connReplaceTo, setConnReplaceTo] = useState("");
-  const [connReplaceWeekIdx, setConnReplaceWeekIdx] = useState(0);
   const [connReplaceHours, setConnReplaceHours] = useState("");
 
   // Region rotation
@@ -389,6 +424,7 @@ export default function ShiftSchedulerPage() {
   // Connection assignments
   const [connAssignments, setConnAssignments] = useState<ConnectionAssignment[]>([]);
   const [connAssignmentTotals, setConnAssignmentTotals] = useState<ConnectionAssignmentTotals[]>([]);
+  const [showConnectionSchedule, setShowConnectionSchedule] = useState(false);
   const [showAddAssignment, setShowAddAssignment] = useState(false);
   const [assignEmpId, setAssignEmpId] = useState("");
   const [assignRegionCovered, setAssignRegionCovered] = useState("");
@@ -403,6 +439,9 @@ export default function ShiftSchedulerPage() {
   // Inline hours editing
   const [editingHoursDate, setEditingHoursDate] = useState<string | null>(null);
   const [editingHoursValue, setEditingHoursValue] = useState<string>("");
+
+  // Active tab: "helpdesk" or "connection"
+  const [activeTab, setActiveTab] = useState<"helpdesk" | "connection">("helpdesk");
 
   // Role helpers
   const canEdit = user && (user.role === "admin" || user.role === "editor");
@@ -431,11 +470,12 @@ export default function ShiftSchedulerPage() {
         setSettings({
           ...settRes,
           dayHours: settRes.dayHours || {},
+          holidayHours: settRes.holidayHours || {},
         });
       } else {
         setSettings({
           shifts: { Weekday: { start: "05:00 PM", end: "10:00 PM", hours: 5 }, Thursday: { start: "05:00 PM", end: "10:00 PM", hours: 5 }, Friday: { start: "01:00 PM", end: "10:00 PM", hours: 9 }, Saturday: { start: "01:00 PM", end: "10:00 PM", hours: 9 }, Holiday: { start: "10:00 AM", end: "10:00 PM", hours: 12 } },
-          weekStart: "Friday", holidays: [], summerTime: false,
+          weekStart: "Friday", holidays: [], holidayHours: {}, summerTime: false,
           summerShifts: { Weekday: { start: "05:00 PM", end: "11:00 PM", hours: 6 }, Thursday: { start: "05:00 PM", end: "11:00 PM", hours: 6 }, Friday: { start: "01:00 PM", end: "11:00 PM", hours: 10 }, Saturday: { start: "01:00 PM", end: "11:00 PM", hours: 10 } },
           dayHours: {},
         });
@@ -448,8 +488,7 @@ export default function ShiftSchedulerPage() {
 
   const fetchBalance = useCallback(async () => {
     try {
-      const regionParam = selectedRegion !== "all" ? `&region=${selectedRegion}` : "";
-      const res = await authFetch(`/api/reports?month=${selectedMonth}${regionParam}`);
+      const res = await authFetch(`/api/reports?month=${selectedMonth}&region=${selectedRegion}`);
       const data = await res.json();
       if (data.balance) setBalance(data.balance);
     } catch {
@@ -462,6 +501,11 @@ export default function ShiftSchedulerPage() {
       const res = await authFetch(`/api/schedule?month=${selectedMonth}`);
       if (res.ok) {
         const data = await res.json();
+        console.log("[fetchScheduleEntries] Received data:", {
+          entriesCount: data.entries?.length || 0,
+          holidaysInEntries: data.entries?.filter(e => e.isHoliday).map(e => ({ date: e.date, isHoliday: e.isHoliday, hours: e.hours })),
+          totalHours: data.entries?.reduce((sum: number, e: any) => sum + e.hours, 0).toFixed(1),
+        });
         if (data.entries) setEntries(data.entries);
         if (data.generatedMonths) setGeneratedMonths(data.generatedMonths);
       }
@@ -472,7 +516,8 @@ export default function ShiftSchedulerPage() {
 
   const fetchConnectionTeam = useCallback(async () => {
     try {
-      const res = await authFetch(`/api/connection-team?month=${selectedMonth}`);
+      // Connection team is global - fetch all entries without month filter
+      const res = await authFetch("/api/connection-team");
       if (res.ok) {
         const data = await res.json();
         setConnectionTeam(data.entries || []);
@@ -480,7 +525,7 @@ export default function ShiftSchedulerPage() {
     } catch {
       // ignore
     }
-  }, [authFetch, selectedMonth]);
+  }, [authFetch]);
 
   const fetchRegionRotations = useCallback(async () => {
     try {
@@ -508,7 +553,7 @@ export default function ShiftSchedulerPage() {
             setUser(data.user);
             setIsAuthenticated(true);
             // Auto-select region for non-admin users
-            if (data.user.region && data.user.region !== "all") {
+            if (data.user.region && ["cairo", "delta", "upper_egypt"].includes(data.user.region)) {
               setSelectedRegion(data.user.region);
             }
           } else {
@@ -527,6 +572,36 @@ export default function ShiftSchedulerPage() {
       fetchAllData();
     }
   }, [isAuthenticated, fetchAllData]);
+
+  const fetchConnAssignments = useCallback(async () => {
+    try {
+      // Build week options inline
+      const [y, m] = selectedMonth.split("-");
+      const year = Number(y);
+      const month = Number(m);
+      const firstDay = new Date(year, month - 1, 1);
+      const lastDay = new Date(year, month, 0);
+      let d = new Date(firstDay);
+      while (d.getDay() !== 5) d.setDate(d.getDate() - 1);
+      const weeks: { weekStart: string }[] = [];
+      while (d <= lastDay) {
+        const ws = new Date(d);
+        ws.setDate(ws.getDate());
+        const wsStr = `${ws.getFullYear()}-${String(ws.getMonth() + 1).padStart(2, "0")}-${String(ws.getDate()).padStart(2, "0")}`;
+        weeks.push({ weekStart: wsStr });
+        d.setDate(d.getDate() + 7);
+      }
+      const weekParam = weeks.length > 0 ? `&week=${weeks[0].weekStart}` : "";
+      const res = await authFetch(`/api/connection-assignments?month=${selectedMonth}${weekParam}`);
+      if (res.ok) {
+        const data = await res.json();
+        setConnAssignments(data.entries || []);
+        setConnAssignmentTotals(data.totals || []);
+      }
+    } catch {
+      // ignore
+    }
+  }, [authFetch, selectedMonth]);
 
   useEffect(() => {
     if (isAuthenticated && !dataLoading) {
@@ -550,13 +625,13 @@ export default function ShiftSchedulerPage() {
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        const userData = { id: data.id, username: data.username, role: data.role, email: data.email, region: data.region || "all" };
+        const userData = { id: data.id, username: data.username, role: data.role, email: data.email, region: data.region || "cairo" };
         localStorage.setItem("auth_token", data.token);
         localStorage.setItem("auth_user", JSON.stringify(userData));
         setAuthToken(data.token);
         setUser(userData);
         setIsAuthenticated(true);
-        if (data.region && data.region !== "all") {
+        if (data.region && ["cairo", "delta", "upper_egypt"].includes(data.region)) {
           setSelectedRegion(data.region);
         }
         setLoginUsername("");
@@ -671,8 +746,7 @@ export default function ShiftSchedulerPage() {
     if (!canAdmin) return;
     setGenerating(true);
     try {
-      const regionParam = selectedRegion !== "all" ? `&region=${selectedRegion}` : "";
-      const res = await authFetch(`/api/schedule?month=${selectedMonth}${regionParam}`, { method: "DELETE" });
+      const res = await authFetch(`/api/schedule?month=${selectedMonth}&region=${selectedRegion}`, { method: "DELETE" });
       if (res.status === 401) { handleLogout(); return; }
       const data = await res.json();
       if (res.ok) {
@@ -693,13 +767,35 @@ export default function ShiftSchedulerPage() {
   const toggleHoliday = async (date: string, current: boolean) => {
     if (!canEdit || !settings) return;
     const newHoliday = !current;
-    const newEntries = entries.map((e) => e.date === date ? { ...e, isHoliday: newHoliday } : e);
-    setEntries(newEntries);
+
+    // When adding a holiday, add default hours deduction based on weekday
+    let newHolidayHours = { ...(settings.holidayHours || {}) };
+    if (newHoliday) {
+      if (!newHolidayHours[date]) {
+        const defaultHours = getDefaultHolidayHours(date, settings);
+        newHolidayHours[date] = defaultHours;
+        console.log("[toggleHoliday] Added holiday with default hours:", { date, defaultHours });
+      }
+    } else {
+      delete newHolidayHours[date];
+      console.log("[toggleHoliday] Removed holiday:", { date });
+    }
+
     const newHolidays = newHoliday ? [...new Set([...settings.holidays, date])].sort() : settings.holidays.filter((h) => h !== date);
-    const newSettings = { ...settings, holidays: newHolidays };
+    const newSettings = { ...settings, holidays: newHolidays, holidayHours: newHolidayHours };
+
+    console.log("[toggleHoliday] Sending to API:", { holidays: newHolidays, holidayHours: newHolidayHours });
+
     try {
       await authFetch("/api/settings", { method: "POST", body: JSON.stringify(newSettings) });
       setSettings(newSettings);
+
+      // IMPORTANT: Fetch entries from DB to see updated isHoliday and hours
+      console.log("[toggleHoliday] Fetching updated entries...");
+      await fetchScheduleEntries();
+      console.log("[toggleHoliday] Fetching connection team...");
+      await fetchConnectionTeam();
+
       toast({ title: "Updated", description: `${date} ${newHoliday ? "marked as holiday" : "unmarked as holiday"}` });
     } catch {
       toast({ title: "Error", description: "Failed to update holiday", variant: "destructive" });
@@ -709,8 +805,7 @@ export default function ShiftSchedulerPage() {
   const deleteEntry = async (date: string) => {
     if (!canEdit) return;
     try {
-      const regionParam = selectedRegion !== "all" ? `?region=${selectedRegion}` : "";
-      const res = await authFetch(`/api/schedule/${date}${regionParam}`, { method: "DELETE" });
+      const res = await authFetch(`/api/schedule/${date}?region=${selectedRegion}`, { method: "DELETE" });
       if (res.ok) {
         setEntries(entries.filter((e) => e.date !== date));
         toast({ title: "Deleted", description: `Entry for ${date} removed` });
@@ -813,12 +908,12 @@ export default function ShiftSchedulerPage() {
       return;
     }
     try {
-      const res = await authFetch("/api/employees", { method: "POST", body: JSON.stringify({ name: newEmpName, hrid: newEmpHrid, active: true, region: newEmpRegion }) });
+      const res = await authFetch("/api/employees", { method: "POST", body: JSON.stringify({ name: newEmpName, hrid: newEmpHrid, active: true, region: newEmpTeamType === "connection" ? "all" : newEmpRegion, teamType: newEmpTeamType }) });
       if (res.ok) {
         const data = await res.json();
         setEmployees([...employees, data.employee]);
-        setNewEmpName(""); setNewEmpHrid(""); setNewEmpRegion("all");
-        toast({ title: "Added", description: `${newEmpName} added to تيم الكونكشن` });
+        setNewEmpName(""); setNewEmpHrid(""); setNewEmpRegion("cairo"); setNewEmpTeamType("helpdesk");
+        toast({ title: "Added", description: `${newEmpName} added` });
       }
     } catch {
       toast({ title: "Error", description: "Failed to add employee", variant: "destructive" });
@@ -827,13 +922,18 @@ export default function ShiftSchedulerPage() {
 
   const editEmployee = async (id: number, name: string, hrid: string) => {
     if (!name || !hrid) return;
+    const emp = employees.find((e) => e.id === id);
+    if (!emp) return;
+    const isConnection = emp.teamType === "connection";
     try {
-      const res = await authFetch("/api/employees", { method: "PUT", body: JSON.stringify({ id, name, hrid, region: editEmpRegion }) });
+      const res = await authFetch("/api/employees", { method: "PUT", body: JSON.stringify({ id, name, hrid, region: isConnection ? "all" : editEmpRegion, teamType: editEmpTeamType }) });
       if (res.ok) {
-        setEmployees(employees.map((e) => e.id === id ? { ...e, name: name.trim(), hrid: hrid.trim(), region: editEmpRegion } : e));
+        setEmployees(employees.map((e) => e.id === id ? { ...e, name: name.trim(), hrid: hrid.trim(), region: isConnection ? "all" : editEmpRegion, teamType: editEmpTeamType } : e));
         setEditingEmpId(null);
         setEditEmpName("");
         setEditEmpHrid("");
+        setEditEmpRegion("cairo");
+        setEditEmpTeamType("");
         toast({ title: "Updated", description: `${name} updated` });
       }
     } catch {
@@ -890,11 +990,79 @@ export default function ShiftSchedulerPage() {
     }
   };
 
-  // ===== Export =====
-  const exportExcel = async () => {
+  // ===== Export Connection Team =====
+  const exportConnectionExcel = async () => {
     setExporting(true);
     try {
-      const res = await authFetch("/api/export", {
+      const res = await authFetch("/api/export/connection-team", {
+        method: "POST",
+        body: JSON.stringify({ monthKey: selectedMonth }),
+      });
+      if (res.status === 401) { handleLogout(); return; }
+      if (!res.ok) {
+        const data = await res.json();
+        toast({ title: "Error", description: data.error || "Export failed", variant: "destructive" });
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Connection_Team_Schedule_${selectedMonth}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast({ title: "Exporting", description: "Connection Team Excel file downloaded" });
+    } catch {
+      toast({ title: "Error", description: "Failed to export Connection Team", variant: "destructive" });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // ===== Export Both Teams =====
+  const exportBothExcel = async () => {
+    setExporting(true);
+    try {
+      const res = await authFetch("/api/export/both", {
+        method: "POST",
+        body: JSON.stringify({
+          month: selectedMonth,
+          selectedEmployeeIds: exportSelectedIds.length > 0 ? exportSelectedIds : undefined,
+          dateFrom: exportDateFrom || undefined,
+          dateTo: exportDateTo || undefined,
+          region: exportRegion || selectedRegion,
+        }),
+      });
+      if (res.status === 401) { handleLogout(); return; }
+      if (!res.ok) {
+        const data = await res.json();
+        toast({ title: "Error", description: data.error || "Export failed", variant: "destructive" });
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Full_Schedule_${selectedMonth}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast({ title: "Exporting", description: "Full Excel file with both teams downloaded" });
+    } catch {
+      toast({ title: "Error", description: "Failed to export", variant: "destructive" });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // ===== Export Helpdesk =====
+  const exportHelpdeskExcel = async () => {
+    setExporting(true);
+    try {
+      const res = await authFetch("/api/export/helpdesk", {
         method: "POST",
         body: JSON.stringify({ month: selectedMonth, selectedEmployeeIds: exportSelectedIds.length > 0 ? exportSelectedIds : undefined, dateFrom: exportDateFrom || undefined, dateTo: exportDateTo || undefined, region: exportRegion || selectedRegion }),
       });
@@ -908,15 +1076,58 @@ export default function ShiftSchedulerPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `IT_Helpdesk_Schedule_${selectedMonth}.xlsx`;
+      a.download = `Helpdesk_Schedule_${selectedMonth}_${selectedRegion.toUpperCase()}.xlsx`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      toast({ title: "Exporting", description: "Excel file downloaded" });
-      setShowExport(false);
+      toast({ title: "Exporting", description: "Helpdesk Excel file downloaded" });
     } catch {
-      toast({ title: "Error", description: "Failed to export", variant: "destructive" });
+      toast({ title: "Error", description: "Failed to export Helpdesk", variant: "destructive" });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // ===== Export by HRID =====
+  const exportHridExcel = async () => {
+    if (!exportHrid) {
+      toast({ title: "Error", description: "Please select an employee HRID", variant: "destructive" });
+      return;
+    }
+    setExporting(true);
+    try {
+      const emp = employees.find(e => e.hrid === exportHrid);
+      if (!emp) {
+        toast({ title: "Error", description: "Employee not found", variant: "destructive" });
+        return;
+      }
+      const res = await authFetch("/api/export/hrid", {
+        method: "POST",
+        body: JSON.stringify({ 
+          hrid: exportHrid,
+          monthFrom: exportHridMonthFrom || undefined,
+          monthTo: exportHridMonthTo || undefined,
+        }),
+      });
+      if (res.status === 401) { handleLogout(); return; }
+      if (!res.ok) {
+        const data = await res.json();
+        toast({ title: "Error", description: data.error || "Export failed", variant: "destructive" });
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${emp.name}_${exportHrid}_Schedule.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast({ title: "Exporting", description: `Excel file downloaded for ${emp.name}` });
+    } catch {
+      toast({ title: "Error", description: "Failed to export employee", variant: "destructive" });
     } finally {
       setExporting(false);
     }
@@ -1039,44 +1250,32 @@ export default function ShiftSchedulerPage() {
       toast({ title: "Error", description: "Please select an employee", variant: "destructive" });
       return;
     }
+    if (!connWeekStart || !connWeekEnd) {
+      toast({ title: "Error", description: "Please select week start and end dates", variant: "destructive" });
+      return;
+    }
     try {
-      // Use only region-filtered active employees for Connection Team
-      const activeEmps = regionActiveEmps;
+      // Use only connection team employees (teamType = "connection" or "both" or empty)
+      const activeEmps = connectionTeamEmps;
       const emp = activeEmps[Number(connEmpIdx)];
       if (!emp) return;
 
-      // Build week dates for selected month
-      const [y, m] = selectedMonth.split("-");
-      const year = Number(y);
-      const month = Number(m);
-      const firstDay = new Date(year, month - 1, 1);
-      const lastDay = new Date(year, month, 0);
-      let d = new Date(firstDay);
-      while (d.getDay() !== 5) d.setDate(d.getDate() - 1);
-      const weeks: { weekStart: string; weekEnd: string }[] = [];
-      while (d <= lastDay) {
-        const ws = new Date(d);
-        const we = new Date(d);
-        we.setDate(we.getDate() + 6);
-        const wsStr = `${ws.getFullYear()}-${String(ws.getMonth() + 1).padStart(2, "0")}-${String(ws.getDate()).padStart(2, "0")}`;
-        const weStr = `${we.getFullYear()}-${String(we.getMonth() + 1).padStart(2, "0")}-${String(we.getDate()).padStart(2, "0")}`;
-        if (weeks.length <= connWeekIdx) weeks.push({ weekStart: wsStr, weekEnd: weStr });
-        d.setDate(d.getDate() + 7);
-      }
-      if (connWeekIdx >= weeks.length) {
-        toast({ title: "Error", description: "Invalid week selected", variant: "destructive" });
-        return;
-      }
-      const { weekStart, weekEnd } = weeks[connWeekIdx];
+      const weekStart = connWeekStart;
+      const weekEnd = connWeekEnd;
+
+      // Calculate monthKey from the selected weekStart date (YYYY-MM format)
+      const [year, month] = weekStart.split("-");
+      const monthKey = `${year}-${month}`;
 
       const res = await authFetch("/api/connection-team", {
         method: "POST",
-        body: JSON.stringify({ weekStart, weekEnd, empIdx: Number(connEmpIdx), empName: emp.name, empHrid: emp.hrid, monthKey: selectedMonth, region: selectedRegion }),
+        body: JSON.stringify({ weekStart, weekEnd, empIdx: Number(connEmpIdx), empName: emp.name, empHrid: emp.hrid, monthKey, region: "all" }),
       });
       if (res.ok) {
-        toast({ title: "Added", description: `Connection Team member assigned for ${weekStart} to ${weekEnd}` });
+        toast({ title: "Added", description: `Connection Team member assigned for ${formatDateDisplay(weekStart)} to ${formatDateDisplay(weekEnd)}` });
         setShowAddConnection(false);
-        setConnWeekIdx(0);
+        setConnWeekStart("");
+        setConnWeekEnd("");
         setConnEmpIdx("");
         fetchConnectionTeam();
       } else {
@@ -1099,25 +1298,111 @@ export default function ShiftSchedulerPage() {
     }
   };
 
-  // ===== Connection Team Replace / Transfer =====
-  const replaceConnectionPerson = async () => {
-    if (!connReplaceTo) {
-      toast({ title: "Error", description: "Please select a target employee", variant: "destructive" });
+  // ===== Connection Team Auto Generation =====
+  const generateConnectionMonth = async () => {
+    if (!settings) return;
+    const [y, m] = selectedMonth.split("-");
+    const year = Number(y);
+    const month = Number(m);
+
+    // Build weeks for the selected month
+    const weeks: { weekStart: string; weekEnd: string }[] = [];
+    let d = new Date(year, month - 1, 1);
+    // Find first Friday
+    while (d.getDay() !== 5) d.setDate(d.getDate() - 1);
+    // Get all weeks in month
+    const lastDay = new Date(year, month, 0);
+    while (d <= lastDay) {
+      const weekEnd = new Date(d);
+      weekEnd.setDate(weekEnd.getDate() + 6);
+      weeks.push({
+        weekStart: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
+        weekEnd: `${weekEnd.getFullYear()}-${String(weekEnd.getMonth() + 1).padStart(2, "0")}-${String(weekEnd.getDate()).padStart(2, "0")}`,
+      });
+      d.setDate(d.getDate() + 7);
+    }
+
+    if (weeks.length === 0) {
+      toast({ title: "Error", description: "No weeks found for this month", variant: "destructive" });
       return;
     }
-    const weeks = buildWeekOptions();
-    const week = weeks[connReplaceWeekIdx];
-    if (!week) return;
+
+    setGenerating(true);
+    try {
+      const res = await authFetch("/api/connection-team/generate", {
+        method: "POST",
+        body: JSON.stringify({ monthKey: selectedMonth, weeks }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        toast({ title: "Success", description: `Generated ${data.generated || 0} Connection Team assignments for ${MONTHS[month - 1]} ${year}` });
+        await fetchConnectionTeam();
+        await fetchConnAssignments();
+      } else {
+        const errorData = await res.json();
+        toast({ title: "Error", description: errorData.error || "Generation failed", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", description: "Failed to generate Connection Team schedule", variant: "destructive" });
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  // ===== Connection Team Clear with Save/Restore =====
+  const clearConnectionTeam = async () => {
+    setGenerating(true);
+    try {
+      // Save current configuration as template
+      const currentConfig = connectionTeam.map(ct => ({
+        empName: ct.empName,
+        empHrid: ct.empHrid,
+        weekStart: ct.weekStart,
+        weekEnd: ct.weekEnd,
+      }));
+
+      // Save to localStorage as backup
+      localStorage.setItem(`connection_team_backup_${selectedMonth}`, JSON.stringify({
+        monthKey: selectedMonth,
+        savedAt: new Date().toISOString(),
+        config: currentConfig,
+      }));
+
+      toast({ title: "Template Saved", description: `Current Connection Team configuration saved for ${selectedMonth}. You can restore it anytime.` });
+
+      // Clear all entries
+      const res = await authFetch("/api/connection-team", { method: "DELETE" });
+      if (res.ok) {
+        const data = await res.json();
+        toast({ title: "Cleared", description: `Removed ${data.deleted || 0} Connection Team entries. Template saved in history.` });
+        await fetchConnectionTeam();
+        await fetchConnAssignments();
+      } else {
+        const errorData = await res.json();
+        toast({ title: "Error", description: errorData.error || "Failed to clear", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", description: "Failed to clear Connection Team", variant: "destructive" });
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  // ===== Connection Team Replace / Transfer =====
+  const replaceConnectionPerson = async () => {
+    if (!connReplaceTo || !connWeekStart) {
+      toast({ title: "Error", description: "Please select a week and target employee", variant: "destructive" });
+      return;
+    }
+    const existingEntry = connectionTeam.find(ct => ct.weekStart === connWeekStart);
+    if (!existingEntry) return;
 
     try {
-      // Find and delete existing entry for this week
-      const existingEntry = connectionTeam.find(ct => ct.weekStart === week.weekStart);
-      if (existingEntry) {
-        await authFetch(`/api/connection-team?id=${existingEntry.id}`, { method: "DELETE" });
-      }
+      // Delete existing entry for this week
+      await authFetch(`/api/connection-team?id=${existingEntry.id}`, { method: "DELETE" });
 
-      // Create new entry with target employee (region-filtered)
-      const activeEmps = regionActiveEmps;
+      // Create new entry with target employee (connection team employees only)
+      const activeEmps = connectionTeamEmps;
       const empIdx = activeEmps.findIndex(e => e.name === connReplaceTo);
       if (empIdx < 0) return;
       const targetEmp = activeEmps[empIdx];
@@ -1125,23 +1410,23 @@ export default function ShiftSchedulerPage() {
       const res = await authFetch("/api/connection-team", {
         method: "POST",
         body: JSON.stringify({
-          weekStart: week.weekStart,
-          weekEnd: week.weekEnd,
+          weekStart: existingEntry.weekStart,
+          weekEnd: existingEntry.weekEnd,
           empIdx,
           empName: targetEmp.name,
           empHrid: targetEmp.hrid,
-          monthKey: selectedMonth,
-          region: selectedRegion,
+          monthKey: existingEntry.monthKey,
+          region: "all",
         }),
       });
 
       if (res.ok) {
-        toast({ title: "Replaced", description: `Connection Team member replaced for week ${formatDateDisplay(week.weekStart)} → ${formatDateDisplay(week.weekEnd)}` });
+        toast({ title: "Replaced", description: `Connection Team member replaced for week ${formatDateDisplay(existingEntry.weekStart)} → ${formatDateDisplay(existingEntry.weekEnd)}` });
         setShowConnReplace(false);
         setConnReplaceFrom("");
         setConnReplaceTo("");
-        setConnReplaceWeekIdx(0);
         setConnReplaceHours("");
+        setConnWeekStart("");
         fetchConnectionTeam();
       } else {
         toast({ title: "Error", description: "Failed to replace Connection Team member", variant: "destructive" });
@@ -1152,20 +1437,6 @@ export default function ShiftSchedulerPage() {
   };
 
   // ===== Connection Assignments Actions =====
-  const fetchConnAssignments = useCallback(async () => {
-    try {
-      const weekParam = buildWeekOptions().length > 0 ? `&week=${buildWeekOptions()[0].weekStart}` : "";
-      const res = await authFetch(`/api/connection-assignments?month=${selectedMonth}${weekParam}`);
-      if (res.ok) {
-        const data = await res.json();
-        setConnAssignments(data.entries || []);
-        setConnAssignmentTotals(data.totals || []);
-      }
-    } catch {
-      // ignore
-    }
-  }, [authFetch, selectedMonth]);
-
   const addAssignment = async () => {
     if (!assignEmpId || !assignRegionCovered) {
       toast({ title: "Error", description: "Employee and region are required", variant: "destructive" });
@@ -1315,19 +1586,25 @@ export default function ShiftSchedulerPage() {
 
   // ===== Region-filtered entries — STRICT (use entry.region column directly) =====
   const monthEntries = entries.filter((e) => e.date.startsWith(selectedMonth));
-  const filteredEntries = selectedRegion === "all" ? monthEntries : monthEntries.filter((e) => e.region === selectedRegion);
-  const regionActiveEmps = employees.filter((e) => e.active && (selectedRegion === "all" || e.region === selectedRegion));
-  const connectionEmpSet = new Set(connectionTeam.filter((ct) => {
-    if (selectedRegion === "all") return true;
-    return ct.region === selectedRegion;
-  }).map((c) => `${c.empName}-${c.weekStart}`));
+  const filteredEntries = monthEntries.filter((e) => e.region === selectedRegion);
+  const regionActiveEmps = employees.filter((e) => e.active && e.region === selectedRegion && e.teamType === "helpdesk");
 
-  // Build connection team lookup by week start date (STRICT region filter)
+  // Connection team employees: must have teamType = "connection"
+  const connectionTeamEmps = employees.filter((e) => e.active && e.teamType === "connection");
+  // Connection team always shows all entries (region is "all")
+  const filteredConnectionTeam = connectionTeam;
+  const filteredConnectionAssignments = connAssignments;
+  // Use same week key calculation as used in weekMap building
+  const connectionEmpSet = new Set(filteredConnectionTeam.map((c) => {
+    const weekKey = getWeekNumber(c.weekStart);
+    return `${c.empName}-${weekKey}`;
+  }));
+
+  // Build connection team lookup by week key (using getWeekNumber for consistency)
   const connectionByWeek = new Map<string, ConnectionTeamEntry>();
-  for (const ct of connectionTeam) {
-    if (selectedRegion === "all" || ct.region === selectedRegion) {
-      connectionByWeek.set(ct.weekStart, ct);
-    }
+  for (const ct of filteredConnectionTeam) {
+    const weekKey = getWeekNumber(ct.weekStart);
+    connectionByWeek.set(weekKey, ct);
   }
 
   // Calculate connection team hours for each entry (full week hours)
@@ -1336,8 +1613,18 @@ export default function ShiftSchedulerPage() {
     let total = 0;
     const start = new Date(weekStart + "T00:00:00");
     const end = new Date(weekEnd + "T00:00:00");
+    console.log("[calcConnectionWeekHours] Calculating for", { weekStart, weekEnd, holidays: settings.holidays, holidayHours: settings.holidayHours });
+
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      // Check if this is a holiday - holidays = 0 hours (not working)
+      const isHol = settings.holidays?.includes(dateStr) || false;
+      if (isHol) {
+        // HOLIDAYS: 0 hours (not working)
+        console.log(`[calcConnectionWeekHours] Holiday ${dateStr}: 0h (not working)`);
+        // Skip (0 hours)
+        continue;
+      }
       // Check dayHours override first
       if (settings.dayHours && settings.dayHours[dateStr] !== undefined) {
         total += settings.dayHours[dateStr];
@@ -1347,16 +1634,14 @@ export default function ShiftSchedulerPage() {
         if (jsDay === 6) dayType = "Saturday";
         else if (jsDay === 5) dayType = "Friday";
         else if (jsDay === 4) dayType = "Thursday";
-        const isHol = settings.holidays?.includes(dateStr) || false;
-        if (isHol && settings.shifts["Holiday"]) {
-          total += settings.shifts["Holiday"].hours;
-        } else if (settings.summerTime && settings.summerShifts?.[dayType]) {
+        if (settings.summerTime && settings.summerShifts?.[dayType]) {
           total += settings.summerShifts[dayType].hours;
         } else {
           total += settings.shifts[dayType]?.hours || settings.shifts["Weekday"]?.hours || 5;
         }
       }
     }
+    console.log(`[calcConnectionWeekHours] Total for ${weekStart} - ${weekEnd}: ${total}h`);
     return total;
   };
 
@@ -1382,7 +1667,26 @@ export default function ShiftSchedulerPage() {
   }
 
   const totalHours = filteredEntries.reduce((s, e) => s + e.hours, 0);
-  const totalDays = filteredEntries.length;
+  const totalDays = filteredEntries.filter(e => !e.isHoliday).length; // Work Days = non-holiday days
+
+  // Calculate holiday deduction hours
+  const holidayDeductionHours = settings
+    ? filteredEntries
+        .filter(e => e.isHoliday && settings.holidayHours?.[e.date])
+        .reduce((sum, e) => sum + (settings.holidayHours?.[e.date] || 0), 0)
+    : 0;
+
+  // Log for debugging
+  console.log("[Total Hours Calculation]", {
+    selectedMonth,
+    selectedRegion,
+    totalEntries: entries.length,
+    filteredEntries: filteredEntries.length,
+    totalHours,
+    totalDays, // Non-holiday days
+    holidayDeductionHours,
+    holidayEntriesInMonth: filteredEntries.filter(e => e.isHoliday).map(e => ({ date: e.date, hours: e.hours })),
+  });
   const totalHolidays = filteredEntries.filter((e) => e.isHoliday).length;
   const totalWeeks = weekGroups.length;
 
@@ -1444,9 +1748,11 @@ export default function ShiftSchedulerPage() {
           <div className="max-w-7xl mx-auto px-4 py-3">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-3">
-                <CalendarDays className="h-6 w-6 text-blue-400" />
-                <h1 className="text-lg sm:text-xl font-bold tracking-tight">IT Helpdesk Shift Scheduler</h1>
-                {balance && (
+                {activeTab === "helpdesk" ? <CalendarDays className="h-6 w-6 text-blue-400" /> : <Link2 className="h-6 w-6 text-teal-400" />}
+                <h1 className="text-lg sm:text-xl font-bold tracking-tight">
+                  {activeTab === "helpdesk" ? "IT Helpdesk Shift Scheduler" : "Connection Team Weekly Assignments"}
+                </h1>
+                {activeTab === "helpdesk" && balance && (
                   <Badge variant="outline" className={`ml-2 hidden sm:inline-flex ${balance.status === "green" ? "border-green-500 text-green-400 bg-green-500/10" : balance.status === "yellow" ? "border-yellow-500 text-yellow-400 bg-yellow-500/10" : "border-red-500 text-red-400 bg-red-500/10"}`}>
                     <CheckCircle className="h-3 w-3 mr-1" />{balance.variance.toFixed(1)}h variance
                   </Badge>
@@ -1467,7 +1773,7 @@ export default function ShiftSchedulerPage() {
                 {canEdit && (
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <Button variant="ghost" size="icon" className="text-slate-300 hover:text-white hover:bg-slate-700" onClick={() => { setEditSettings(settings ? JSON.parse(JSON.stringify(settings)) : undefined); setNewHolidayDate(""); setNewDayHourDate(""); setNewDayHourValue(""); setShowSettings(true); }}><Settings className="h-5 w-5" /></Button>
+                      <Button variant="ghost" size="icon" className="text-slate-300 hover:text-white hover:bg-slate-700" onClick={() => { setEditSettings(settings ? JSON.parse(JSON.stringify(settings)) : undefined); setNewHolidayDate(""); setNewHolidayHours(""); setNewDayHourDate(""); setNewDayHourValue(""); setShowSettings(true); }}><Settings className="h-5 w-5" /></Button>
                     </TooltipTrigger>
                     <TooltipContent>Settings</TooltipContent>
                   </Tooltip>
@@ -1528,33 +1834,58 @@ export default function ShiftSchedulerPage() {
         <div className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shadow-sm">
           <div className="max-w-7xl mx-auto px-4 py-2">
             <div className="flex flex-wrap gap-2 items-center">
-              {canEdit && (
+              {activeTab === "helpdesk" && canEdit && (
                 <>
                   <Button onClick={generateMonth} disabled={generating} className="bg-blue-600 hover:bg-blue-700 text-white"><Sparkles className="h-4 w-4 mr-1.5" />{generating ? "Generating..." : "Generate Month"}</Button>
                   <Button onClick={generateWeek} disabled={generating} variant="outline" className="border-blue-300 text-blue-700 hover:bg-blue-50"><Calendar className="h-4 w-4 mr-1.5" />This Week</Button>
                   <Button onClick={() => { setAddShiftDate(""); setAddShiftEmp(""); setShowAddShift(true); }} variant="outline"><Plus className="h-4 w-4 mr-1.5" />Add Shift</Button>
                   <Button onClick={() => { setSwapMode(!swapMode); setSwapFirst(null); }} variant={swapMode ? "default" : "outline"} className={swapMode ? "bg-purple-600 text-white" : "border-purple-300 text-purple-700"}><ArrowLeftRight className="h-4 w-4 mr-1.5" />{swapMode ? "Cancel Swap" : "Swap Mode"}</Button>
-                  <Button onClick={() => { setExportSelectedIds([]); setExportDateFrom(""); setExportDateTo(""); setExportRegion(selectedRegion); setShowExport(true); }} disabled={filteredEntries.length === 0} variant="outline" className="border-emerald-300 text-emerald-700"><FileSpreadsheet className="h-4 w-4 mr-1.5" />Export Excel</Button>
+                  <Button onClick={() => { setExportType("helpdesk"); setExportSelectedIds([]); setExportDateFrom(""); setExportDateTo(""); setExportRegion(selectedRegion); setShowExport(true); }} disabled={filteredEntries.length === 0} variant="outline" className="border-emerald-300 text-emerald-700"><FileSpreadsheet className="h-4 w-4 mr-1.5" />Export Excel</Button>
                 </>
               )}
-              {canAdmin && (
+              {activeTab === "helpdesk" && canAdmin && (
                 <Button onClick={clearSchedule} disabled={filteredEntries.length === 0 || generating} variant="outline" className="border-red-300 text-red-700 hover:bg-red-50"><Trash2 className="h-4 w-4 mr-1.5" />Clear</Button>
               )}
+              {activeTab === "helpdesk" && (
               <div className="ml-auto">
                 <Select value={selectedRegion} onValueChange={setSelectedRegion} disabled={user?.role !== "admin" && user?.region !== "all"}>
                   <SelectTrigger className="w-[180px] h-9 text-xs"><MapPin className="h-3.5 w-3.5 mr-1" /><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {Object.entries(REGIONS).map(([key, label]) => (
+                    {Object.entries(REGIONS).filter(([k]) => k !== "all").map(([key, label]) => (
                       <SelectItem key={key} value={key}>{label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
+              )}
             </div>
           </div>
         </div>
 
-        {/* STATS ROW */}
+        {/* TAB SWITCHER */}
+        <div className="max-w-7xl mx-auto px-4 mt-4">
+          <div className="flex gap-1 bg-slate-200 dark:bg-slate-800 p-1 rounded-lg w-fit">
+            <Button
+              variant={activeTab === "helpdesk" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setActiveTab("helpdesk")}
+              className={activeTab === "helpdesk" ? "bg-blue-600 text-white shadow-sm" : "text-slate-600 dark:text-slate-400"}
+            >
+              <HeadphonesIcon className="h-4 w-4 mr-2" />Helpdesk Schedule
+            </Button>
+            <Button
+              variant={activeTab === "connection" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setActiveTab("connection")}
+              className={activeTab === "connection" ? "bg-teal-600 text-white shadow-sm" : "text-slate-600 dark:text-slate-400"}
+            >
+              <Link2 className="h-4 w-4 mr-2" />Connection Team
+            </Button>
+          </div>
+        </div>
+
+        {/* STATS ROW - Only show for Helpdesk */}
+        {activeTab === "helpdesk" && (
         <div className="max-w-7xl mx-auto w-full px-4 mt-4">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <Card className="shadow-sm"><CardContent className="p-4 text-center"><div className="text-2xl font-bold text-slate-800 dark:text-slate-100">{totalWeeks}</div><div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Weeks</div></CardContent></Card>
@@ -1562,10 +1893,22 @@ export default function ShiftSchedulerPage() {
             <Card className="shadow-sm"><CardContent className="p-4 text-center"><div className="text-2xl font-bold text-amber-600">{totalHolidays}</div><div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Holidays</div></CardContent></Card>
             <Card className="shadow-sm"><CardContent className="p-4 text-center"><div className="text-2xl font-bold text-blue-600">{totalHours.toFixed(1)}h</div><div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Total Hours</div></CardContent></Card>
           </div>
+          {/* Holiday Deduction Display */}
+          {holidayDeductionHours > 0 && (
+            <div className="mt-3 max-w-7xl mx-auto">
+              <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                <span className="text-sm text-amber-800 dark:text-amber-200">
+                  Holiday Deduction: <span className="font-bold">-{holidayDeductionHours.toFixed(1)}h</span>
+                </span>
+              </div>
+            </div>
+          )}
         </div>
+        )}
 
-        {/* SWAP BANNER */}
-        {swapMode && canEdit && (
+        {/* SWAP BANNER - Only show for Helpdesk */}
+        {activeTab === "helpdesk" && swapMode && canEdit && (
           <div className="max-w-7xl mx-auto w-full px-4 mt-3">
             <div className="bg-purple-50 dark:bg-purple-950 border border-purple-200 dark:border-purple-800 rounded-lg p-3 flex items-center gap-3">
               <ArrowLeftRight className="h-5 w-5 text-purple-600 flex-shrink-0" />
@@ -1575,20 +1918,36 @@ export default function ShiftSchedulerPage() {
           </div>
         )}
 
-        {/* CONNECTION TEAM TOOLBAR BUTTONS */}
-        {canEdit && (
+        {/* CONNECTION TEAM TOOLBAR BUTTONS - Only show for Connection tab */}
+        {activeTab === "connection" && canEdit && (
           <div className="max-w-7xl mx-auto w-full px-4 mt-3">
             <div className="flex items-center gap-2 flex-wrap">
-              <Button size="sm" variant="outline" className="border-teal-300 text-teal-700 hover:bg-teal-50 h-8" onClick={() => { setConnWeekIdx(0); setConnEmpIdx(""); setShowAddConnection(true); }}><Plus className="h-3.5 w-3.5 mr-1" />تيم الكونكشن</Button>
-              {connectionTeam.length > 0 && (
-                <Button size="sm" variant="outline" className="border-teal-300 text-teal-700 hover:bg-teal-50 h-8" onClick={() => { setConnReplaceFrom(""); setConnReplaceTo(""); setConnReplaceWeekIdx(0); setConnReplaceHours(""); setShowConnReplace(true); }}><ArrowLeftRight className="h-3.5 w-3.5 mr-1" />تبديل تيم الكونكشن</Button>
+              <Button size="sm" variant="outline" className="border-teal-300 text-teal-700 hover:bg-teal-50 h-8" onClick={() => { setConnWeekStart(""); setConnWeekEnd(""); setConnEmpIdx(""); setShowAddConnection(true); }}><Plus className="h-3.5 w-3.5 mr-1" />Add Connection Member</Button>
+              {filteredConnectionTeam.length > 0 && (
+                <Button size="sm" variant="outline" className="border-teal-300 text-teal-700 hover:bg-teal-50 h-8" onClick={() => { setConnReplaceFrom(""); setConnReplaceTo(""); setConnReplaceHours(""); setConnWeekStart(""); setShowConnReplace(true); }}><ArrowLeftRight className="h-3.5 w-3.5 mr-1" />Replace Connection Member</Button>
               )}
             </div>
           </div>
         )}
 
-        {/* REGION ROTATION SECTION */}
-        {regionRotations.length > 0 && (
+        {/* CONNECTION TAB REGION SELECTOR - Fixed to 'all' for Connection Team */}
+        {activeTab === "connection" && (
+          <div className="max-w-7xl mx-auto w-full px-4 mt-4">
+            <div className="bg-white dark:bg-slate-900 border border-violet-200 dark:border-violet-800 rounded-lg p-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <MapPin className="h-4 w-4 text-violet-600" />
+                <span className="font-semibold text-sm text-slate-700 dark:text-slate-200">Region:</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge className="bg-violet-600 text-white border-violet-600">All Regions</Badge>
+                <span className="text-xs text-slate-500 italic">Connection team works across all regions</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* REGION ROTATION SECTION - Only show for Connection tab */}
+        {activeTab === "connection" && regionRotations.length > 0 && (
           <div className="max-w-7xl mx-auto w-full px-4 mt-4">
             <Card className="shadow-sm border-orange-200 dark:border-orange-800">
               <div className="bg-gradient-to-r from-orange-600 to-orange-500 text-white px-4 py-2.5 flex items-center justify-between">
@@ -1623,7 +1982,116 @@ export default function ShiftSchedulerPage() {
           </div>
         )}
 
-        {/* CONNECTION ASSIGNMENTS SECTION */}
+        {/* CONNECTION TEAM STATS DASHBOARD - Only show for Connection tab */}
+        {activeTab === "connection" && (
+          <div className="max-w-7xl mx-auto w-full px-4 mt-4">
+            <Card className="shadow-sm bg-gradient-to-br from-teal-50 to-cyan-50 dark:from-teal-950/20 dark:to-cyan-950/20 border-teal-200 dark:border-teal-800">
+              <div className="bg-gradient-to-r from-teal-600 to-teal-500 text-white px-4 py-2.5 flex items-center justify-between">
+                <div className="flex items-center gap-2"><BarChart3 className="h-4 w-4" /><span className="font-semibold text-sm">Connection Team Statistics</span></div>
+              </div>
+              <div className="p-4">
+                {/* Stats Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                  <Card className="shadow-sm"><CardContent className="p-3 text-center"><div className="text-xl font-bold text-teal-600">{connectionTeam.length}</div><div className="text-xs text-slate-500">Total Members</div></CardContent></Card>
+                  <Card className="shadow-sm"><CardContent className="p-3 text-center"><div className="text-xl font-bold text-teal-600">{connAssignmentTotals.reduce((sum, t) => sum + (t.weekly?.assignmentCount || 0), 0)}</div><div className="text-xs text-slate-500">Weekly Assignments</div></CardContent></Card>
+                  <Card className="shadow-sm"><CardContent className="p-3 text-center"><div className="text-xl font-bold text-teal-600">{connAssignmentTotals.reduce((sum, t) => sum + (t.weekly?.totalHours || 0), 0).toFixed(0)}h</div><div className="text-xs text-slate-500">Total Hours</div></CardContent></Card>
+                  <Card className="shadow-sm"><CardContent className="p-3 text-center"><div className="text-xl font-bold text-teal-600">{connAssignmentTotals.length > 0 ? (connAssignmentTotals.reduce((sum, t) => sum + (t.weekly?.totalHours || 0), 0) / connAssignmentTotals.length).toFixed(0) : 0}h</div><div className="text-xs text-slate-500">Avg Hours/Member</div></CardContent></Card>
+                </div>
+
+                {/* Employee Distribution Table */}
+                {connectionTeamEmps.length > 0 && (
+                  <table className="w-full text-sm">
+                    <thead><tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+                      <th className="px-3 py-2 text-left text-xs text-slate-500">#</th>
+                      <th className="px-3 py-2 text-left text-xs text-slate-500">Employee</th>
+                      <th className="px-3 py-2 text-center text-xs text-slate-500">Weeks Assigned</th>
+                      <th className="px-3 py-2 text-center text-xs text-slate-500">Total Hours</th>
+                      <th className="px-3 py-2 text-center text-xs text-slate-500">Avg Hours/Week</th>
+                    </tr></thead>
+                    <tbody>
+                      {connectionTeamEmps.map((emp, idx) => {
+                        const empTeamEntries = connectionTeam.filter((ct) => ct.empName === emp.name);
+                        const totalHrs = empTeamEntries.reduce((sum, ct) => sum + calcConnectionWeekHours(ct.weekStart, ct.weekEnd), 0);
+                        const weeksCount = empTeamEntries.length;
+                        const avgHrs = weeksCount > 0 ? totalHrs / weeksCount : 0;
+                        return (
+                          <tr key={emp.id} className="border-b border-slate-100 dark:border-slate-800">
+                            <td className="px-3 py-2 text-slate-400 text-xs">{idx + 1}</td>
+                            <td className="px-3 py-2 font-medium text-sm">{emp.name}</td>
+                            <td className="px-3 py-2 text-center text-xs">{weeksCount}</td>
+                            <td className="px-3 py-2 text-center text-xs"><span className="font-bold text-teal-600">{totalHrs.toFixed(0)}h</span></td>
+                            <td className="px-3 py-2 text-center text-xs">{avgHrs.toFixed(1)}h</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* Connection Team Action Buttons */}
+        {activeTab === "connection" && canEdit && (
+          <div className="max-w-7xl mx-auto w-full px-4 mt-4 flex gap-3 flex-wrap">
+            <Button onClick={generateConnectionMonth} disabled={generating} className="bg-teal-600 hover:bg-teal-700 text-white flex items-center gap-2">
+              {generating ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              Generate Month
+            </Button>
+            <Button onClick={clearConnectionTeam} disabled={generating} variant="destructive" className="flex items-center gap-2">
+              <Trash2 className="h-4 w-4" />
+              Clear Connection Team
+            </Button>
+            <Button onClick={() => { setExportType("connection"); setExportDateFrom(""); setExportDateTo(""); setShowExport(true); }} variant="outline" className="border-teal-300 text-teal-700 hover:bg-teal-50 flex items-center gap-2">
+              <FileSpreadsheet className="h-4 w-4" />
+              Export Connection Team
+            </Button>
+          </div>
+        )}
+
+        {/* CONNECTION TEAM ROSTER - Only show for Connection tab */}
+        {activeTab === "connection" && connectionTeam.length > 0 && (
+          <div className="max-w-7xl mx-auto w-full px-4 mt-4">
+            <Card className="shadow-sm border-teal-200 dark:border-teal-800">
+              <div className="bg-gradient-to-r from-teal-600 to-teal-500 text-white px-4 py-2.5 flex items-center justify-between">
+                <div className="flex items-center gap-2"><Link2 className="h-4 w-4" /><span className="font-semibold text-sm">Connection Team Roster</span></div>
+                <span className="text-xs text-teal-100">{connectionTeam.length} members</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead><tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+                    <th className="px-3 py-2 text-left text-xs text-slate-500">Employee</th>
+                    <th className="px-3 py-2 text-left text-xs text-slate-500">HRID</th>
+                    <th className="px-3 py-2 text-left text-xs text-slate-500">Week Start</th>
+                    <th className="px-3 py-2 text-left text-xs text-slate-500">Week End</th>
+                    <th className="px-3 py-2 text-center text-xs text-slate-500">Total Hours</th>
+                    {canEdit && <th className="px-3 py-2 text-center text-xs text-slate-500">Actions</th>}
+                  </tr></thead>
+                  <tbody>
+                    {connectionTeam.map((ct) => (
+                      <tr key={ct.id} className="border-b border-slate-100 dark:border-slate-800 hover:bg-teal-50/50 dark:hover:bg-teal-950/20 transition-colors">
+                        <td className="px-3 py-2 font-medium text-slate-700 dark:text-slate-200">{ct.empName}</td>
+                        <td className="px-3 py-2 text-xs text-slate-500">{ct.empHrid}</td>
+                        <td className="px-3 py-2 text-xs text-slate-500">{formatDateDisplay(ct.weekStart)}</td>
+                        <td className="px-3 py-2 text-xs text-slate-500">{formatDateDisplay(ct.weekEnd)}</td>
+                        <td className="px-3 py-2 text-center text-xs font-semibold text-teal-600">{calcConnectionWeekHours(ct.weekStart, ct.weekEnd).toFixed(1)}h</td>
+                        {canEdit && (
+                          <td className="px-3 py-2 text-center">
+                            <Button size="icon" variant="ghost" className="h-7 w-7 text-red-400 hover:text-red-600" onClick={() => deleteConnectionEntry(ct.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* CONNECTION ASSIGNMENTS SECTION - Only show for Connection tab */}
+        {activeTab === "connection" && (
         <div className="max-w-7xl mx-auto w-full px-4 mt-4">
           <Card className="shadow-sm border-violet-200 dark:border-violet-800">
             <div className="bg-gradient-to-r from-violet-600 to-violet-500 text-white px-4 py-2.5 flex items-center justify-between">
@@ -1667,9 +2135,9 @@ export default function ShiftSchedulerPage() {
                   {canEdit && <th className="px-3 py-2 text-center text-xs text-slate-500">Actions</th>}
                 </tr></thead>
                 <tbody>
-                  {connAssignments.length === 0 ? (
+                  {filteredConnectionAssignments.length === 0 ? (
                     <tr><td colSpan={canEdit ? 7 : 6} className="px-3 py-6 text-center text-xs text-slate-400 italic">No connection assignments for this month</td></tr>
-                  ) : connAssignments.map((a) => {
+                  ) : filteredConnectionAssignments.map((a) => {
                     const emp = employees.find(e => e.id === a.employeeId);
                     return (
                       <tr key={a.id} className="border-b border-slate-100 dark:border-slate-800">
@@ -1688,8 +2156,10 @@ export default function ShiftSchedulerPage() {
             </div>
           </Card>
         </div>
+        )}
 
-        {/* SCHEDULE TABLE */}
+        {/* SCHEDULE TABLE - Only show for Helpdesk tab */}
+        {activeTab === "helpdesk" && (
         <main className="max-w-7xl mx-auto w-full px-4 mt-4 mb-8 flex-1">
           {dataLoading ? (
             <div className="flex items-center justify-center py-20"><div className="flex flex-col items-center gap-3"><RefreshCw className="h-8 w-8 text-slate-400 animate-spin" /><span className="text-slate-500 text-sm">Loading schedule...</span></div></div>
@@ -1713,7 +2183,7 @@ export default function ShiftSchedulerPage() {
                       <div className="flex items-center gap-2 flex-wrap">
                         {connPerson && (() => {
                           const connHrs = calcConnectionWeekHours(connPerson.weekStart, connPerson.weekEnd);
-                          return <Badge className="bg-teal-500/90 text-white border-0 text-xs"><Link2 className="h-2.5 w-2.5 mr-0.5" />تيم الكونكشن: {connPerson.empName} ({connHrs.toFixed(1)}h)</Badge>;
+                          return <Badge className="bg-teal-500/90 text-white border-0 text-xs"><Link2 className="h-2.5 w-2.5 mr-0.5" />Connection: {connPerson.empName} ({connHrs.toFixed(1)}h)</Badge>;
                         })()}
                         <Badge className="bg-red-500/80 text-white border-0 text-xs">OFF: {offPerson}</Badge>
                         {canEdit && (
@@ -1804,7 +2274,7 @@ export default function ShiftSchedulerPage() {
                         <div className="bg-teal-50 dark:bg-teal-950/20 border-t border-teal-200 dark:border-teal-800 px-4 py-2.5 flex items-center justify-between">
                           <div className="flex items-center gap-2 text-sm text-teal-700 dark:text-teal-300">
                             <Link2 className="h-4 w-4" />
-                            <span className="font-semibold text-teal-800 dark:text-teal-200">تيم الكونكشن: {connPerson.empName} ({connPerson.empHrid}) | {calcConnectionWeekHours(connPerson.weekStart, connPerson.weekEnd).toFixed(1)}h</span>
+                            <span className="font-semibold text-teal-800 dark:text-teal-200">Connection: {connPerson.empName} ({connPerson.empHrid}) | {calcConnectionWeekHours(connPerson.weekStart, connPerson.weekEnd).toFixed(1)}h</span>
                           </div>
                           <div className="flex items-center gap-1">
                             {canEdit && (
@@ -1821,6 +2291,7 @@ export default function ShiftSchedulerPage() {
             </div>
           )}
         </main>
+        )}
 
         {/* ===== SETTINGS MODAL ===== */}
         <Dialog open={showSettings} onOpenChange={setShowSettings}>
@@ -1872,16 +2343,65 @@ export default function ShiftSchedulerPage() {
                 <div className="space-y-3">
                   <h3 className="font-semibold text-sm text-slate-700 dark:text-slate-200 flex items-center gap-1.5"><AlertTriangle className="h-4 w-4 text-amber-500" />Holiday Dates</h3>
                   <div className="flex gap-2">
-                    <Input type="date" value={newHolidayDate} onChange={(e) => setNewHolidayDate(e.target.value)} className="h-8 text-xs flex-1" />
-                    <Button size="sm" className="h-8 bg-amber-600 hover:bg-amber-700 text-white" onClick={() => { if (!newHolidayDate) return; if (editSettings.holidays.includes(newHolidayDate)) return; setEditSettings({ ...editSettings, holidays: [...editSettings.holidays, newHolidayDate].sort() }); setNewHolidayDate(""); }}><Plus className="h-3.5 w-3.5 mr-1" />Add</Button>
+                    <Input type="date" value={newHolidayDate} onChange={(e) => {
+                      setNewHolidayDate(e.target.value);
+                      // Auto-fill default hours based on weekday
+                      if (e.target.value) {
+                        const defaultHours = getDefaultHolidayHours(e.target.value, editSettings);
+                        setNewHolidayHours(defaultHours.toString());
+                      }
+                    }} className="h-8 text-xs flex-1" />
+                    <Input type="number" value={newHolidayHours} onChange={(e) => setNewHolidayHours(e.target.value)} placeholder="Hours" className="h-8 text-xs w-20" min={0} max={12} />
+                    <Button size="sm" className="h-8 bg-amber-600 hover:bg-amber-700 text-white" onClick={() => {
+                      if (!newHolidayDate) return;
+                      if (editSettings.holidays.includes(newHolidayDate)) return;
+                      const hours = newHolidayHours ? Number(newHolidayHours) : getDefaultHolidayHours(newHolidayDate, editSettings);
+                      setEditSettings({
+                        ...editSettings,
+                        holidays: [...editSettings.holidays, newHolidayDate].sort(),
+                        holidayHours: { ...editSettings.holidayHours, [newHolidayDate]: hours }
+                      });
+                      setNewHolidayDate("");
+                      setNewHolidayHours("");
+                    }}><Plus className="h-3.5 w-3.5 mr-1" />Add</Button>
                   </div>
                   {editSettings.holidays.length > 0 ? (
-                    <div className="space-y-1.5 max-h-40 overflow-y-auto">{editSettings.holidays.map((hDate) => (
-                      <div key={hDate} className="flex items-center justify-between bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2">
-                        <div className="flex items-center gap-2"><Calendar className="h-3.5 w-3.5 text-amber-500" /><span className="text-xs font-medium text-amber-800 dark:text-amber-200">{formatHolidayDisplay(hDate)}</span><span className="text-[10px] text-amber-500">{hDate}</span></div>
-                        <Button size="icon" variant="ghost" className="h-6 w-6 text-red-400 hover:text-red-600 hover:bg-red-50" onClick={() => { setEditSettings({ ...editSettings, holidays: editSettings.holidays.filter((d) => d !== hDate) }); }}><X className="h-3 w-3" /></Button>
-                      </div>
-                    ))}</div>
+                    <div className="space-y-1.5 max-h-40 overflow-y-auto">{editSettings.holidays.map((hDate) => {
+                      const holidayHours = editSettings.holidayHours?.[hDate] ?? getDefaultHolidayHours(hDate, editSettings);
+                      return (
+                        <div key={hDate} className="flex items-center justify-between bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2">
+                          <div className="flex items-center gap-2">
+                            <Calendar className="h-3.5 w-3.5 text-amber-500" />
+                            <span className="text-xs font-medium text-amber-800 dark:text-amber-200">{formatHolidayDisplay(hDate)}</span>
+                            <span className="text-[10px] text-amber-500">{hDate}</span>
+                            <Badge variant="outline" className="h-5 text-[10px] px-1.5 py-0 border-amber-300 text-amber-700 dark:border-amber-600 dark:text-amber-300">-{holidayHours}h</Badge>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <Input
+                              type="number"
+                              value={editSettings.holidayHours?.[hDate] ?? ""}
+                              onChange={(e) => {
+                                const hrs = Number(e.target.value);
+                                setEditSettings({
+                                  ...editSettings,
+                                  holidayHours: { ...editSettings.holidayHours, [hDate]: hrs }
+                                });
+                              }}
+                              className="h-6 w-14 text-xs text-center"
+                              min={0}
+                              max={12}
+                              placeholder={getDefaultHolidayHours(hDate, editSettings).toString()}
+                            />
+                            <Button size="icon" variant="ghost" className="h-6 w-6 text-red-400 hover:text-red-600 hover:bg-red-50" onClick={() => {
+                              const newHolidays = editSettings.holidays.filter((d) => d !== hDate);
+                              const newHolidayHours = { ...editSettings.holidayHours };
+                              delete newHolidayHours[hDate];
+                              setEditSettings({ ...editSettings, holidays: newHolidays, holidayHours: newHolidayHours });
+                            }}><X className="h-3 w-3" /></Button>
+                          </div>
+                        </div>
+                      );
+                    })}</div>
                   ) : <p className="text-xs text-slate-400 italic">No holidays configured.</p>}
                 </div>
                 <Separator />
@@ -1922,34 +2442,67 @@ export default function ShiftSchedulerPage() {
         {/* ===== EMPLOYEES MODAL ===== */}
         <Dialog open={showEmployees} onOpenChange={setShowEmployees}>
           <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
-            <DialogHeader><DialogTitle className="flex items-center gap-2"><Users className="h-5 w-5" /> تيم الكونكشن / Connection Team</DialogTitle><DialogDescription>Manage your Connection Team roster</DialogDescription></DialogHeader>
+            <DialogHeader><DialogTitle className="flex items-center gap-2"><Users className="h-5 w-5" /> Connection Team</DialogTitle><DialogDescription>Manage your Connection Team roster</DialogDescription></DialogHeader>
             <div className="space-y-4 mt-2">
               {canEdit && (
-                <div className="flex gap-2">
-                  <Input value={newEmpName} onChange={(e) => setNewEmpName(e.target.value)} placeholder="Full Name" className="h-8 text-sm" />
+                <div className="flex gap-2 flex-wrap">
+                  <Input value={newEmpName} onChange={(e) => setNewEmpName(e.target.value)} placeholder="Full Name" className="h-8 text-sm flex-1 min-w-[120px]" />
                   <Input value={newEmpHrid} onChange={(e) => setNewEmpHrid(e.target.value)} placeholder="HRID" className="h-8 w-24 text-sm" />
-                  <Select value={newEmpRegion} onValueChange={setNewEmpRegion}>
-                    <SelectTrigger className="h-8 w-[150px] text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent>{Object.entries(REGIONS).map(([key, label]) => (<SelectItem key={key} value={key}>{label}</SelectItem>))}</SelectContent>
+                  <Select value={newEmpTeamType} onValueChange={setNewEmpTeamType}>
+                    <SelectTrigger className="h-8 w-[140px] text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>{Object.entries(TEAM_TYPES).map(([key, label]) => (<SelectItem key={key} value={key}>{label}</SelectItem>))}</SelectContent>
                   </Select>
+                  {newEmpTeamType !== "connection" && (
+                    <Select value={newEmpRegion} onValueChange={setNewEmpRegion}>
+                      <SelectTrigger className="h-8 w-[140px] text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>{Object.entries(REGIONS).map(([key, label]) => (<SelectItem key={key} value={key}>{label}</SelectItem>))}</SelectContent>
+                    </Select>
+                  )}
+                  {newEmpTeamType === "connection" && <div className="text-xs text-slate-400 italic ml-2">Region not applicable</div>}
                   <Button onClick={addEmployee} size="sm" className="bg-blue-600 hover:bg-blue-700 text-white h-8"><Plus className="h-4 w-4" /></Button>
                 </div>
               )}
               <Separator />
               <div className="space-y-2">{employees.map((emp, idx) => (
                 <div key={emp.id} className={`flex items-center justify-between p-2 rounded-lg border ${emp.active ? "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900" : "border-red-200 dark:border-red-900 bg-red-50/50 dark:bg-red-950/20 opacity-60"}`}>
-                  {editingEmpId === emp.id ? (
-                    <div className="flex items-center gap-2 flex-1"><span className="text-xs text-slate-400 w-5">{idx + 1}</span><div className="flex flex-col gap-1 flex-1"><Input value={editEmpName} onChange={(e) => setEditEmpName(e.target.value)} className="h-7 text-xs" placeholder="Name" /><div className="flex gap-2"><Input value={editEmpHrid} onChange={(e) => setEditEmpHrid(e.target.value)} className="h-7 text-xs w-32" placeholder="HRID" /><Select value={editEmpRegion} onValueChange={setEditEmpRegion}><SelectTrigger className="h-7 w-[130px] text-xs"><SelectValue /></SelectTrigger><SelectContent>{Object.entries(REGIONS).map(([key, label]) => (<SelectItem key={key} value={key}>{label}</SelectItem>))}</SelectContent></Select></div></div></div>
-                  ) : (
-                    <div className="flex items-center gap-3"><span className="text-xs text-slate-400 w-5">{idx + 1}</span><div><div className="font-medium text-sm">{emp.name}</div><div className="text-xs text-slate-500">HRID: {emp.hrid} | <Badge variant="outline" className="text-[9px]">{REGIONS[emp.region] || emp.region}</Badge></div></div></div>
-                  )}
                   <div className="flex items-center gap-2">
-                    {editingEmpId === emp.id ? (
-                      <><Button size="sm" className="h-7 bg-emerald-600 hover:bg-emerald-700 text-white text-xs" onClick={() => editEmployee(emp.id, editEmpName, editEmpHrid)}><CheckCircle className="h-3 w-3 mr-1" />Save</Button><Button size="icon" variant="ghost" className="h-7 w-7 text-slate-400" onClick={() => { setEditingEmpId(null); }}><X className="h-3.5 w-3.5" /></Button></>
-                    ) : canEdit ? (
-                      <><Button size="icon" variant="ghost" className="h-7 w-7 text-blue-400 hover:text-blue-600" onClick={() => { setEditingEmpId(emp.id); setEditEmpName(emp.name); setEditEmpHrid(emp.hrid); setEditEmpRegion(emp.region || "all"); }}><Pencil className="h-3.5 w-3.5" /></Button><div className="flex items-center gap-1.5"><Switch checked={emp.active} onCheckedChange={() => toggleEmployeeActive(emp.id, emp.active)} className="scale-75" /><span className="text-[10px] text-slate-400">{emp.active ? "Active" : "Inactive"}</span></div>{canAdmin && <Button size="icon" variant="ghost" className="h-7 w-7 text-red-400 hover:text-red-600" onClick={() => deleteEmployee(emp.id, emp.name)}><Trash2 className="h-3.5 w-3.5" /></Button>}</>
-                    ) : null}
+                    <span className="font-medium text-sm">{emp.name}</span>
+                    <span className="text-xs text-slate-400">({emp.hrid})</span>
+                    {emp.teamType && (
+                      <Badge variant={emp.teamType === "connection" ? "default" : "secondary"} className="text-[10px] ml-2">
+                        {emp.teamType === "connection" ? "Connection" : "Helpdesk"}
+                      </Badge>
+                    )}
                   </div>
+                  {editingEmpId === emp.id ? (
+                    <>
+                      <div className="flex gap-2">
+                        <Input value={editEmpName} onChange={(e) => setEditEmpName(e.target.value)} placeholder="Name" className="h-7 w-32 text-sm" />
+                        <Input value={editEmpHrid} onChange={(e) => setEditEmpHrid(e.target.value)} placeholder="HRID" className="h-7 w-20 text-sm" />
+                        <Select value={editEmpTeamType || "helpdesk"} onValueChange={setEditEmpTeamType}>
+                          <SelectTrigger className="h-7 w-[110px] text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>{Object.entries(TEAM_TYPES).map(([key, label]) => (<SelectItem key={key} value={key}>{label}</SelectItem>))}</SelectContent>
+                        </Select>
+                        {editEmpTeamType !== "connection" && (
+                          <Select value={editEmpRegion} onValueChange={setEditEmpRegion}>
+                            <SelectTrigger className="h-7 w-[110px] text-xs"><SelectValue /></SelectTrigger>
+                            <SelectContent>{Object.entries(REGIONS).map(([key, label]) => (<SelectItem key={key} value={key}>{label}</SelectItem>))}</SelectContent>
+                          </Select>
+                        )}
+                        {editEmpTeamType === "connection" && <div className="text-[10px] text-slate-400 italic self-center ml-1">Region: all</div>}
+                      </div>
+                      <div className="flex gap-1">
+                        <Button size="sm" className="h-7 bg-emerald-600 hover:bg-emerald-700 text-white text-xs" onClick={() => editEmployee(emp.id, editEmpName, editEmpHrid)}><CheckCircle className="h-3 w-3 mr-1" />Save</Button>
+                        <Button size="icon" variant="ghost" className="h-7 w-7 text-slate-400" onClick={() => { setEditingEmpId(null); }}><X className="h-3.5 w-3.5" /></Button>
+                      </div>
+                    </>
+                  ) : canEdit ? (
+                    <>
+                      <Button size="icon" variant="ghost" className="h-7 w-7 text-blue-400 hover:text-blue-600" onClick={() => { setEditingEmpId(emp.id); setEditEmpName(emp.name); setEditEmpHrid(emp.hrid); setEditEmpRegion(emp.region || "cairo"); setEditEmpTeamType(emp.teamType || "helpdesk"); }}><Pencil className="h-3.5 w-3.5" /></Button>
+                      <div className="flex items-center gap-1.5"><Switch checked={emp.active} onCheckedChange={() => toggleEmployeeActive(emp.id, emp.active)} className="scale-75" /><span className="text-[10px] text-slate-400">{emp.active ? "Active" : "Inactive"}</span></div>
+                      {canAdmin && <Button size="icon" variant="ghost" className="h-7 w-7 text-red-400 hover:text-red-600" onClick={() => deleteEmployee(emp.id, emp.name)}><Trash2 className="h-3.5 w-3.5" /></Button>}
+                    </>
+                  ) : null}
                 </div>
               ))}</div>
             </div>
@@ -1970,40 +2523,159 @@ export default function ShiftSchedulerPage() {
 
         {/* ===== EXPORT MODAL ===== */}
         <Dialog open={showExport} onOpenChange={setShowExport}>
-          <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+          <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
             <DialogHeader><DialogTitle className="flex items-center gap-2"><FileSpreadsheet className="h-5 w-5" /> Export to Excel</DialogTitle><DialogDescription>Customize your export</DialogDescription></DialogHeader>
-            <div className="space-y-4 mt-2">
-              <div><Label className="text-xs font-medium">Select Region</Label>
-                <Select value={exportRegion} onValueChange={setExportRegion}>
-                  <SelectTrigger className="mt-1 h-8 text-xs"><MapPin className="h-3.5 w-3.5 mr-1" /><SelectValue /></SelectTrigger>
-                  <SelectContent>{Object.entries(REGIONS).map(([key, label]) => (<SelectItem key={key} value={key}>{label}</SelectItem>))}</SelectContent>
-                </Select>
-                <p className="text-[10px] text-slate-400 mt-1">Export schedule for the selected region</p>
-              </div>
-              <Separator />
-              <div><Label className="text-xs font-medium">Select Employees</Label>
-                <div className="mt-2 flex gap-2 mb-2">
-                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { const regionEmps = exportRegion !== "all" ? employees.filter(e => e.region === exportRegion) : employees; setExportSelectedIds(regionEmps.map((e) => e.id)); }}>Select All</Button>
-                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setExportSelectedIds([])}>Deselect All</Button>
-                </div>
-                <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                  {(exportRegion !== "all" ? employees.filter(e => e.region === exportRegion) : employees).map((emp) => (
-                    <div key={emp.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-50 dark:hover:bg-slate-800">
-                      <Checkbox checked={exportSelectedIds.includes(emp.id)} onCheckedChange={(checked) => { if (checked) setExportSelectedIds([...exportSelectedIds, emp.id]); else setExportSelectedIds(exportSelectedIds.filter((id) => id !== emp.id)); }} />
-                      <span className="text-sm">{emp.name} <span className="text-xs text-slate-400">({emp.hrid})</span></span>
-                    </div>
-                  ))}
-                </div>
-                <p className="text-[10px] text-slate-400 mt-1">Leave empty to export all employees</p>
-              </div>
-              <Separator />
-              <div className="grid grid-cols-2 gap-3">
-                <div><Label className="text-xs">Date From</Label><Input type="date" value={exportDateFrom} onChange={(e) => setExportDateFrom(e.target.value)} className="mt-1 h-8 text-xs" /></div>
-                <div><Label className="text-xs">Date To</Label><Input type="date" value={exportDateTo} onChange={(e) => setExportDateTo(e.target.value)} className="mt-1 h-8 text-xs" /></div>
-              </div>
-              <p className="text-[10px] text-slate-400">Leave empty to use selected month: {selectedMonth}</p>
+            
+            {/* Tab Selection */}
+            <div className="flex gap-2 mb-4">
+              <Button 
+                size="sm" 
+                variant={exportType === "helpdesk" ? "default" : "outline"}
+                onClick={() => setExportType("helpdesk")}
+                className={exportType === "helpdesk" ? "bg-emerald-600 text-white" : ""}
+              >Helpdesk</Button>
+              <Button 
+                size="sm" 
+                variant={exportType === "connection" ? "default" : "outline"}
+                onClick={() => setExportType("connection")}
+                className={exportType === "connection" ? "bg-teal-600 text-white" : ""}
+              >Connection Team</Button>
+              <Button 
+                size="sm" 
+                variant={exportType === "hrid" ? "default" : "outline"}
+                onClick={() => setExportType("hrid")}
+                className={exportType === "hrid" ? "bg-violet-600 text-white" : ""}
+              >Search by HRID</Button>
             </div>
-            <DialogFooter><Button variant="outline" onClick={() => setShowExport(false)}>Cancel</Button><Button onClick={exportExcel} disabled={exporting} className="bg-emerald-600 hover:bg-emerald-700 text-white">{exporting ? "Exporting..." : "Export Excel"}</Button></DialogFooter>
+
+            {/* ===== HELPDESK CONTENT ===== */}
+            {exportType === "helpdesk" && (
+              <div className="space-y-4 mt-2">
+                <div className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                  <Checkbox 
+                    checked={exportConnectionOnly} 
+                    onCheckedChange={(checked) => setExportConnectionOnly(!!checked)} 
+                  />
+                  <div className="flex-1">
+                    <div className="text-sm font-medium">Export Connection Team</div>
+                    <div className="text-xs text-slate-500">Check this box to export Connection Team assignments only</div>
+                  </div>
+                </div>
+                
+                <Separator />
+                
+                <div>
+                  <Label className="text-xs font-medium">Select Region</Label>
+                  <Select value={exportRegion} onValueChange={setExportRegion}>
+                    <SelectTrigger className="mt-1 h-8 text-xs"><MapPin className="h-3.5 w-3.5 mr-1" /><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Regions</SelectItem>
+                      <SelectItem value="cairo">Cairo</SelectItem>
+                      <SelectItem value="delta">Delta</SelectItem>
+                      <SelectItem value="upper_egypt">Upper Egypt</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] text-slate-400 mt-1">Export Helpdesk schedule for the selected region</p>
+                </div>
+                
+                <Separator />
+                
+                <div>
+                  <Label className="text-xs font-medium">Select Employees</Label>
+                  <div className="mt-2 flex gap-2 mb-2">
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { const regionEmps = employees.filter(e => e.region === exportRegion); setExportSelectedIds(regionEmps.map((e) => e.id)); }}>Select All</Button>
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setExportSelectedIds([])}>Deselect All</Button>
+                  </div>
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                    {employees.filter(e => e.region === exportRegion).map((emp) => (
+                      <div key={emp.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-50 dark:hover:bg-slate-800">
+                        <Checkbox checked={exportSelectedIds.includes(emp.id)} onCheckedChange={(checked) => { if (checked) setExportSelectedIds([...exportSelectedIds, emp.id]); else setExportSelectedIds(exportSelectedIds.filter((id) => id !== emp.id)); }} />
+                        <span className="text-sm">{emp.name} <span className="text-xs text-slate-400">({emp.hrid})</span></span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1">Leave empty to export all employees</p>
+                </div>
+                
+                <Separator />
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <div><Label className="text-xs">Date From</Label><Input type="date" value={exportDateFrom} onChange={(e) => setExportDateFrom(e.target.value)} className="mt-1 h-8 text-xs" /></div>
+                  <div><Label className="text-xs">Date To</Label><Input type="date" value={exportDateTo} onChange={(e) => setExportDateTo(e.target.value)} className="mt-1 h-8 text-xs" /></div>
+                </div>
+                <p className="text-[10px] text-slate-400">Leave empty to use selected month: {selectedMonth}</p>
+              </div>
+            )}
+
+            {/* ===== CONNECTION TEAM CONTENT ===== */}
+            {exportType === "connection" && (
+              <div className="space-y-4 mt-2">
+                <div className="p-4 bg-teal-50 dark:bg-teal-950 rounded-lg">
+                  <div className="flex items-start gap-2">
+                    <Link2 className="h-5 w-5 text-teal-600 mt-0.5" />
+                    <div>
+                      <div className="text-sm font-medium text-teal-900 dark:text-teal-100">Connection Team Export</div>
+                      <div className="text-xs text-teal-700 dark:text-teal-300">Exports all Connection Team weekly assignments</div>
+                      <div className="text-xs text-teal-600 dark:text-teal-400 mt-1">No region selection needed - Connection Team covers all regions</div>
+                    </div>
+                  </div>
+                </div>
+                
+                <Separator />
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <div><Label className="text-xs">Month From</Label><Input type="month" value={exportHridMonthFrom} onChange={(e) => setExportHridMonthFrom(e.target.value)} className="mt-1 h-8 text-xs" /></div>
+                  <div><Label className="text-xs">Month To</Label><Input type="month" value={exportHridMonthTo} onChange={(e) => setExportHridMonthTo(e.target.value)} className="mt-1 h-8 text-xs" /></div>
+                </div>
+                <p className="text-[10px] text-slate-400">Leave empty to use selected month: {selectedMonth}</p>
+              </div>
+            )}
+
+            {/* ===== SEARCH BY HRID CONTENT ===== */}
+            {exportType === "hrid" && (
+              <div className="space-y-4 mt-2">
+                <div className="p-4 bg-violet-50 dark:bg-violet-950 rounded-lg">
+                  <div className="flex items-start gap-2">
+                    <Search className="h-5 w-5 text-violet-600 mt-0.5" />
+                    <div>
+                      <div className="text-sm font-medium text-violet-900 dark:text-violet-100">Search by Employee HRID</div>
+                      <div className="text-xs text-violet-700 dark:text-violet-300">Export schedule for a single employee across multiple months/weeks</div>
+                    </div>
+                  </div>
+                </div>
+                
+                <div>
+                  <Label className="text-xs font-medium">Employee HRID</Label>
+                  <Select value={exportHrid} onValueChange={setExportHrid}>
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="Select employee by HRID" /></SelectTrigger>
+                    <SelectContent>
+                      {employees.filter(e => e.active).map((emp) => (
+                        <SelectItem key={emp.id} value={emp.hrid}>{emp.hrid} - {emp.name} ({emp.region})</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                
+                <Separator />
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <div><Label className="text-xs">Month From</Label><Input type="month" value={exportHridMonthFrom} onChange={(e) => setExportHridMonthFrom(e.target.value)} className="mt-1 h-8 text-xs" /></div>
+                  <div><Label className="text-xs">Month To</Label><Input type="month" value={exportHridMonthTo} onChange={(e) => setExportHridMonthTo(e.target.value)} className="mt-1 h-8 text-xs" /></div>
+                </div>
+                <p className="text-[10px] text-slate-400">Leave empty to export all available data</p>
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowExport(false)}>Cancel</Button>
+              {exportType === "hrid" ? (
+                <Button onClick={exportHridExcel} disabled={exporting || !exportHrid} className="bg-violet-600 hover:bg-violet-700 text-white">{exporting ? "Exporting..." : "Export Employee"}</Button>
+              ) : exportType === "connection" ? (
+                <Button onClick={exportConnectionExcel} disabled={exporting} className="bg-teal-600 hover:bg-teal-700 text-white">{exporting ? "Exporting..." : "Export Connection Team"}</Button>
+              ) : (
+                <Button onClick={exportHelpdeskExcel} disabled={exporting} className="bg-emerald-600 hover:bg-emerald-700 text-white">{exporting ? "Exporting..." : "Export Helpdesk"}</Button>
+              )}
+            </DialogFooter>
           </DialogContent>
         </Dialog>
 
@@ -2041,7 +2713,7 @@ export default function ShiftSchedulerPage() {
                       const allHrsList = regionActiveEmps.map((e) => filteredEntries.filter((e2) => e2.empName === e.name).reduce((s, e2) => s + e2.hours, 0));
                       const avgH = allHrsList.length > 0 ? allHrsList.reduce((a, b) => a + b, 0) / allHrsList.length : 0;
                       const diff = hrs - avgH;
-                      const connHrs = connectionTeam
+                      const connHrs = filteredConnectionTeam
                         .filter((ct) => ct.empName === emp.name)
                         .reduce((sum, ct) => sum + calcConnectionWeekHours(ct.weekStart, ct.weekEnd), 0);
                       return (
@@ -2170,31 +2842,25 @@ export default function ShiftSchedulerPage() {
         {/* ===== ADD CONNECTION TEAM MODAL ===== */}
         <Dialog open={showAddConnection} onOpenChange={setShowAddConnection}>
           <DialogContent className="max-w-sm">
-            <DialogHeader><DialogTitle className="flex items-center gap-2"><Link2 className="h-5 w-5" /> تعيين تيم الكونكشن</DialogTitle><DialogDescription>Assign a Connection Team member for a specific week</DialogDescription></DialogHeader>
+            <DialogHeader><DialogTitle className="flex items-center gap-2"><Link2 className="h-5 w-5" /> Assign Connection Team</DialogTitle><DialogDescription>Assign a Connection Team member for a specific week</DialogDescription></DialogHeader>
             <div className="space-y-3 mt-2">
-              <div><Label className="text-xs">Week</Label>
-                <Select value={String(connWeekIdx)} onValueChange={(v) => setConnWeekIdx(Number(v))}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {buildWeekOptions().map((w, i) => (
-                      <SelectItem key={i} value={String(i)}>{formatDateDisplay(w.weekStart)} → {formatDateDisplay(w.weekEnd)}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div><Label className="text-xs">Week Start</Label>
+                <Input type="date" value={connWeekStart} onChange={(e) => setConnWeekStart(e.target.value)} className="mt-1" />
+              </div>
+              <div><Label className="text-xs">Week End</Label>
+                <Input type="date" value={connWeekEnd} onChange={(e) => setConnWeekEnd(e.target.value)} className="mt-1" />
               </div>
               <div><Label className="text-xs">Employee</Label>
                 <Select value={connEmpIdx} onValueChange={setConnEmpIdx}>
                   <SelectTrigger className="mt-1"><SelectValue placeholder="Select employee" /></SelectTrigger>
-                  <SelectContent>{regionActiveEmps.map((emp, idx) => (
+                  <SelectContent>{connectionTeamEmps.map((emp, idx) => (
                     <SelectItem key={emp.id} value={String(idx)}>{emp.name} ({emp.hrid})</SelectItem>
                   ))}</SelectContent>
                 </Select>
               </div>
-              {connEmpIdx !== "" && (() => {
-                const weeks = buildWeekOptions();
-                const week = weeks[connWeekIdx];
-                if (week && settings) {
-                  const totalHrs = calcConnectionWeekHours(week.weekStart, week.weekEnd);
+              {connEmpIdx !== "" && connWeekStart && connWeekEnd && (() => {
+                if (settings) {
+                  const totalHrs = calcConnectionWeekHours(connWeekStart, connWeekEnd);
                   return (
                     <div className="bg-teal-50 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-800 rounded-lg p-3">
                       <div className="flex items-center gap-2 text-sm font-semibold text-teal-700 dark:text-teal-300">
@@ -2202,7 +2868,7 @@ export default function ShiftSchedulerPage() {
                         Total Week Hours: {totalHrs.toFixed(1)}h
                       </div>
                       <p className="text-xs text-teal-600 dark:text-teal-400 mt-1">
-                        Working all 7 days: {formatDateDisplay(week.weekStart)} → {formatDateDisplay(week.weekEnd)}
+                        Working all 7 days: {formatDateDisplay(connWeekStart)} → {formatDateDisplay(connWeekEnd)}
                       </p>
                     </div>
                   );
@@ -2212,12 +2878,10 @@ export default function ShiftSchedulerPage() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowAddConnection(false)}>Cancel</Button>
-              {(() => {
-                const weeks = buildWeekOptions();
-                const week = weeks[connWeekIdx];
-                const existingConn = week ? connectionTeam.find(ct => ct.weekStart === week.weekStart) : null;
+              {connWeekStart && connWeekEnd && (() => {
+                const existingConn = connectionTeam.find(ct => ct.weekStart === connWeekStart);
                 return existingConn ? (
-                  <Button onClick={() => { setConnReplaceFrom(existingConn.empName); setConnReplaceTo(""); setConnReplaceWeekIdx(connWeekIdx); setConnReplaceHours(""); setShowAddConnection(false); setShowConnReplace(true); }} className="bg-amber-600 hover:bg-amber-700 text-white">Replace (Current: {existingConn.empName})</Button>
+                  <Button onClick={() => { setConnReplaceFrom(existingConn.empName); setConnReplaceTo(""); setConnReplaceHours(""); setShowAddConnection(false); setShowConnReplace(true); }} className="bg-amber-600 hover:bg-amber-700 text-white">Replace (Current: {existingConn.empName})</Button>
                 ) : (
                   <Button onClick={addConnectionPerson} className="bg-teal-600 hover:bg-teal-700 text-white">Assign</Button>
                 );
@@ -2228,16 +2892,13 @@ export default function ShiftSchedulerPage() {
 
         {/* ===== TRANSFER CONNECTION HOURS MODAL ===== */}
         <Dialog open={showConnReplace} onOpenChange={setShowConnReplace}>
-          <DialogContent className="max-w-md">
-            <DialogHeader><DialogTitle className="flex items-center gap-2"><ArrowLeftRight className="h-5 w-5" /> تبديل تيم الكونكشن</DialogTitle><DialogDescription>Replace a Connection Team member for a specific week</DialogDescription></DialogHeader>
+          <DialogContent className="max-w-sm">
+            <DialogHeader><DialogTitle className="flex items-center gap-2"><ArrowLeftRight className="h-5 w-5" /> Replace Connection Team</DialogTitle><DialogDescription>Replace a Connection Team member for a specific week</DialogDescription></DialogHeader>
             <div className="space-y-3 mt-2">
-              <div><Label className="text-xs">Week (with existing Connection Team assignment)</Label>
-                <Select value={String(connReplaceWeekIdx)} onValueChange={(v) => {
-                  const newIdx = Number(v);
-                  setConnReplaceWeekIdx(newIdx);
-                  const weeks = buildWeekOptions();
-                  const week = weeks[newIdx];
-                  const existing = week ? connectionTeam.find(ct => ct.weekStart === week.weekStart) : undefined;
+              <div><Label className="text-xs">Week Start (existing assignment)</Label>
+                <Select value={connWeekStart} onValueChange={(v) => {
+                  setConnWeekStart(v);
+                  const existing = connectionTeam.find(ct => ct.weekStart === v);
                   if (existing) {
                     setConnReplaceFrom(existing.empName);
                     setConnReplaceHours(String(calcConnectionWeekHours(existing.weekStart, existing.weekEnd)));
@@ -2247,29 +2908,33 @@ export default function ShiftSchedulerPage() {
                   }
                   setConnReplaceTo("");
                 }}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select week" /></SelectTrigger>
                   <SelectContent>
-                    {buildWeekOptions().filter((w) => connectionTeam.some(ct => ct.weekStart === w.weekStart)).map((w, i) => {
-                      const actualIdx = buildWeekOptions().findIndex(wo => wo.weekStart === w.weekStart);
-                      const ct = connectionTeam.find(c => c.weekStart === w.weekStart);
-                      return (<SelectItem key={actualIdx} value={String(actualIdx)}>{formatDateDisplay(w.weekStart)} → {formatDateDisplay(w.weekEnd)} ({ct?.empName})</SelectItem>);
-                    })}
+                    {filteredConnectionTeam.map((ct) => (
+                      <SelectItem key={ct.id} value={ct.weekStart}>{formatDateDisplay(ct.weekStart)} → {formatDateDisplay(ct.weekEnd)} ({ct.empName})</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
-                {buildWeekOptions().filter((w) => connectionTeam.some(ct => ct.weekStart === w.weekStart)).length === 0 && (
-                  <p className="text-xs text-slate-400 mt-1 italic">No Connection Team assignments found for this month.</p>
+                {filteredConnectionTeam.length === 0 && (
+                  <p className="text-xs text-slate-400 mt-1 italic">No Connection Team assignments found.</p>
                 )}
               </div>
-              {connReplaceFrom && (
-                <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3">
-                  <div className="text-xs font-medium text-amber-700 dark:text-amber-300">Current Connection Team Member:</div>
-                  <div className="text-sm font-semibold text-amber-800 dark:text-amber-200 mt-0.5">{connReplaceFrom} {connReplaceHours && <span className="text-xs font-normal text-amber-600">({Number(connReplaceHours).toFixed(1)}h)</span>}</div>
-                </div>
-              )}
+              {connReplaceFrom && connWeekStart && (() => {
+                const existing = connectionTeam.find(ct => ct.weekStart === connWeekStart);
+                if (existing) {
+                  return (
+                    <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3">
+                      <div className="text-xs font-medium text-amber-700 dark:text-amber-300">Current Connection Team Member:</div>
+                      <div className="text-sm font-semibold text-amber-800 dark:text-amber-200 mt-0.5">{existing.empName} <span className="text-xs font-normal text-amber-600">({Number(calcConnectionWeekHours(existing.weekStart, existing.weekEnd)).toFixed(1)}h)</span></div>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
               <div><Label className="text-xs">Transfer to Employee</Label>
                 <Select value={connReplaceTo} onValueChange={setConnReplaceTo}>
                   <SelectTrigger className="mt-1"><SelectValue placeholder="Select target employee" /></SelectTrigger>
-                  <SelectContent>{regionActiveEmps.filter((e) => e.name !== connReplaceFrom).map((emp) => (
+                  <SelectContent>{connectionTeamEmps.filter((e) => e.name !== connReplaceFrom).map((emp) => (
                     <SelectItem key={emp.id} value={emp.name}>{emp.name} ({emp.hrid})</SelectItem>
                   ))}</SelectContent>
                 </Select>
@@ -2283,7 +2948,7 @@ export default function ShiftSchedulerPage() {
                 </div>
               )}
             </div>
-            <DialogFooter><Button variant="outline" onClick={() => setShowConnReplace(false)}>Cancel</Button><Button onClick={replaceConnectionPerson} disabled={!connReplaceTo || !connReplaceFrom} className="bg-teal-600 hover:bg-teal-700 text-white">Transfer &amp; Replace</Button></DialogFooter>
+            <DialogFooter><Button variant="outline" onClick={() => { setShowConnReplace(false); setConnWeekStart(""); }}>Cancel</Button><Button onClick={replaceConnectionPerson} disabled={!connReplaceTo || !connReplaceFrom} className="bg-teal-600 hover:bg-teal-700 text-white">Transfer &amp; Replace</Button></DialogFooter>
           </DialogContent>
         </Dialog>
 
@@ -2327,7 +2992,7 @@ export default function ShiftSchedulerPage() {
               <div><Label className="text-xs">Employee</Label>
                 <Select value={assignEmpId} onValueChange={setAssignEmpId}>
                   <SelectTrigger className="mt-1"><SelectValue placeholder="Select employee" /></SelectTrigger>
-                  <SelectContent>{regionActiveEmps.map((emp) => (
+                  <SelectContent>{connectionTeamEmps.map((emp) => (
                     <SelectItem key={emp.id} value={String(emp.id)}>{emp.name} ({emp.hrid})</SelectItem>
                   ))}</SelectContent>
                 </Select>

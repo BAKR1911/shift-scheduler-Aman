@@ -38,24 +38,54 @@ export async function GET(request: NextRequest) {
     }
     const genMonths = await db.generatedMonth.findMany({ where: genMonthsWhere, orderBy: { monthKey: "asc" } });
 
-    const filteredEntries = dbEntries.map((e) => ({
-      date: e.date,
-      dayName: e.dayName,
-      dayType: e.dayType,
-      empIdx: e.empIdx,
-      empName: e.empName,
-      empHrid: e.empHrid,
-      start: e.start,
-      end: e.end,
-      hours: e.hours,
-      offPerson: e.offPerson,
-      offPersonIdx: e.offPersonIdx,
-      offPersonHrid: e.offPersonHrid,
-      weekNum: e.weekNum,
-      isHoliday: e.isHoliday,
-      isManual: e.isManual,
-      region: e.region,
-    }));
+    // Fetch current settings to dynamically recalculate holidays
+    const dbSettings = await db.settings.findUnique();
+    const settings: Settings = {
+      shifts: dbSettings ? JSON.parse(dbSettings.shifts) : {},
+      weekStart: dbSettings?.weekStart || "Friday",
+      holidays: dbSettings ? JSON.parse(dbSettings.holidays) : [],
+      holidayHours: dbSettings ? JSON.parse(dbSettings.holidayHours || "{}") : {},
+      summerTime: !!dbSettings?.summerTime,
+      summerShifts: dbSettings ? JSON.parse(dbSettings.summerShifts) : {},
+      dayHours: dbSettings ? JSON.parse(dbSettings.dayHours || "{}") : {},
+    };
+
+    // Build holiday set for quick lookup
+    const holidaySet = new Set(settings.holidays || []);
+
+    // Convert DB entries to scheduler format and dynamically determine isHoliday
+    const filteredEntries = dbEntries.map((e) => {
+      // DETERMINE HOLIDAY STATUS DYNAMICALLY FROM SETTINGS
+      const isHolidayDynamic = holidaySet.has(e.date);
+      const dayDate = new Date(e.date + "T00:00:00");
+      const jsDay = dayDate.getDay();
+      let dayType = "Weekday";
+      if (jsDay === 6) dayType = "Saturday";
+      else if (jsDay === 5) dayType = "Friday";
+      else if (jsDay === 4) dayType = "Thursday";
+
+      // For holidays, use 0 hours (not working)
+      const hours = isHolidayDynamic ? 0 : e.hours;
+
+      return {
+        date: e.date,
+        dayName: e.dayName,
+        dayType: e.dayType,
+        empIdx: e.empIdx,
+        empName: e.empName,
+        empHrid: e.empHrid,
+        start: e.start,
+        end: e.end,
+        hours: hours,
+        offPerson: e.offPerson,
+        offPersonIdx: e.offPersonIdx,
+        offPersonHrid: e.offPersonHrid,
+        weekNum: e.weekNum,
+        isHoliday: isHolidayDynamic, // Use dynamically determined holiday status
+        isManual: e.isManual,
+        region: e.region,
+      };
+    });
 
     return NextResponse.json({
       entries: filteredEntries,
@@ -77,30 +107,67 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { mode, year, month, weekStart, region } = body;
 
+    console.log(`[ScheduleGen] Request received - mode: ${mode}, region: ${region}, year: ${year}, month: ${month}, weekStart: ${weekStart}, auth.region: ${auth.region}`);
+
     if (!mode) {
       return NextResponse.json({ error: "Mode is required (week or month)" }, { status: 400 });
     }
 
-    // Determine effective region
-    let effectiveRegion = region || "all";
+    // For helpdesk, region MUST be specified (no "all" allowed)
+    if (mode === "month" || mode === "week") {
+      if (!region || region === "all") {
+        return NextResponse.json({ error: "Region must be specified for helpdesk schedule generation. Please select Cairo, Delta, or Upper Egypt." }, { status: 400 });
+      }
+    }
+
+    // Determine effective region (respect auth user's region restriction)
+    let effectiveRegion = region;
     if (auth.region && auth.region !== "all") {
       effectiveRegion = auth.region;
     }
+
+    console.log(`[ScheduleGen] Effective region: "${effectiveRegion}"`);
 
     // Fetch employees and settings from store
     const dbEmployees = await db.employee.findMany({ orderBy: { order: "asc" } });
     const dbSettings = await db.settings.findUnique();
 
     // STRICT region filter — employees must match the selected region exactly
+    console.log(`[ScheduleGen] Generating for region: "${effectiveRegion}", total employees: ${dbEmployees.length}`);
+
     let regionDbEmployees = dbEmployees;
+    let directEmployees: Employee[] | null = null;
+
     if (effectiveRegion !== "all") {
       regionDbEmployees = dbEmployees.filter((e) => e.region === effectiveRegion);
+      console.log(`[ScheduleGen] Filtered to ${regionDbEmployees.length} employees for region "${effectiveRegion}"`);
       if (regionDbEmployees.length === 0) {
-        return NextResponse.json({ error: `No employees found for region: ${effectiveRegion}. Please assign employees to this region first.` }, { status: 400 });
+        // Auto-assign employees from "all" region to this region if none exist
+        const allRegionEmployees = dbEmployees.filter((e) => e.region === "all");
+        if (allRegionEmployees.length > 0) {
+          const assignCount = Math.min(allRegionEmployees.length, 3);
+          const toAssign = allRegionEmployees.slice(0, assignCount);
+          for (const emp of toAssign) {
+            await db.employee.update({
+              where: { id: emp.id },
+              data: { region: effectiveRegion },
+            });
+          }
+          console.log(`[ScheduleGen] Auto-assigned ${toAssign.length} employees from 'all' to region "${effectiveRegion}"`);
+          // Store employees directly since we already mapped them
+          directEmployees = toAssign.map((e) => ({
+            id: e.id,
+            name: e.name,
+            hrid: e.hrid,
+            active: Boolean(e.active),
+          }));
+        } else {
+          return NextResponse.json({ error: `No employees found for region: ${effectiveRegion}. Please create employees for this region first.` }, { status: 400 });
+        }
       }
     }
 
-    const employees: Employee[] = regionDbEmployees.map((e) => ({
+    const employees: Employee[] = directEmployees || regionDbEmployees.map((e) => ({
       id: e.id,
       name: e.name,
       hrid: e.hrid,
@@ -111,14 +178,18 @@ export async function POST(request: NextRequest) {
       shifts: dbSettings ? JSON.parse(dbSettings.shifts) : {},
       weekStart: dbSettings?.weekStart || "Friday",
       holidays: dbSettings ? JSON.parse(dbSettings.holidays) : [],
+      holidayHours: dbSettings ? JSON.parse(dbSettings.holidayHours || "{}") : {},
       summerTime: !!dbSettings?.summerTime,
       summerShifts: dbSettings ? JSON.parse(dbSettings.summerShifts) : {},
       dayHours: dbSettings ? JSON.parse(dbSettings.dayHours || "{}") : {},
     };
 
     const activeEmployees = employees.filter((e) => e.active);
+    console.log(`[ScheduleGen] Active employees in region "${effectiveRegion}": ${activeEmployees.length}`);
 
     if (activeEmployees.length < 2) {
+      const allNames = employees.map(e => `${e.name} (active: ${e.active}, region: ${dbEmployees.find(dbe => dbe.id === e.id)?.region})`).join(", ");
+      console.log(`[ScheduleGen] All employees in region: ${allNames}`);
       return NextResponse.json({ error: "Need at least 2 active employees in this region" }, { status: 400 });
     }
 
@@ -238,8 +309,8 @@ export async function POST(request: NextRequest) {
           offPersonIdx: entry.offPersonIdx,
           offPersonHrid: entry.offPersonHrid,
           weekNum: entry.weekNum,
-          isHoliday: entry.isHoliday ? 1 : 0,
-          isManual: 0,
+          isHoliday: !!entry.isHoliday,
+          isManual: false,
           monthKey,
           region: effectiveRegion,
         })),
@@ -249,6 +320,8 @@ export async function POST(request: NextRequest) {
       if (!existingGenMonths.includes(monthKey)) {
         await db.generatedMonth.create({ data: { monthKey, region: effectiveRegion } });
       }
+
+      console.log(`[ScheduleGen] SUCCESS: Generated ${newEntries.length} entries for month "${monthKey}" in region "${effectiveRegion}"`);
 
       return NextResponse.json({
         generated: newEntries.length,
@@ -293,8 +366,8 @@ export async function POST(request: NextRequest) {
           offPersonIdx: entry.offPersonIdx,
           offPersonHrid: entry.offPersonHrid,
           weekNum: entry.weekNum,
-          isHoliday: entry.isHoliday ? 1 : 0,
-          isManual: 0,
+          isHoliday: !!entry.isHoliday,
+          isManual: false,
           monthKey: entry.date.substring(0, 7),
           region: effectiveRegion,
         })),
@@ -307,6 +380,8 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      console.log(`[ScheduleGen] SUCCESS: Generated ${newEntries.length} entries for week starting "${weekStart}" in region "${effectiveRegion}"`);
+
       return NextResponse.json({
         generated: newEntries.length,
         region: effectiveRegion,
@@ -315,7 +390,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid mode" }, { status: 400 });
     }
   } catch (error) {
-    console.error("Error generating schedule:", error);
+    console.error("[ScheduleGen] ERROR:", error);
     const message = error instanceof Error ? error.message : "Failed to generate schedule";
     return NextResponse.json({ error: message }, { status: 500 });
   }

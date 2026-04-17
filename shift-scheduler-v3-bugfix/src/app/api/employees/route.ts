@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
       data: {
         name: name.trim(),
         hrid: hrid.trim(),
-        active: active !== false ? 1 : 0,
+        active: active !== false,
         region: region || "all",
         teamType: teamType || "",
         order,
@@ -81,7 +81,7 @@ export async function PUT(request: NextRequest) {
       data: {
         ...(name !== undefined && { name: name.trim() }),
         ...(hrid !== undefined && { hrid: hrid.trim() }),
-        ...(active !== undefined && { active: active ? 1 : 0 }),
+        ...(active !== undefined && { active: !!active }),
         ...(order !== undefined && { order }),
         ...(region !== undefined && { region }),
         ...(teamType !== undefined && { teamType }),

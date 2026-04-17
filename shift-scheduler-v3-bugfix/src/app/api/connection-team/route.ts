@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, unauthorizedResponse, forbiddenResponse } from "@/lib/auth";
 import { db } from "@/lib/db";
 
-// GET: List connection team entries (region-filtered)
+// GET: List connection team entries (NO region filtering - global workforce)
 export async function GET(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
@@ -12,15 +12,9 @@ export async function GET(request: NextRequest) {
     const monthKey = searchParams.get("month") || "";
     const region = searchParams.get("region") || "";
 
-    // Determine effective region
-    let effectiveRegion = region;
-    if (!effectiveRegion && auth.region && auth.region !== "all") {
-      effectiveRegion = auth.region;
-    }
-
-    const where: { monthKey?: string; region?: string } = {};
+    // NO region filtering for connection team - it's global
+    const where: { monthKey?: string } = {};
     if (monthKey) where.monthKey = monthKey;
-    if (effectiveRegion && effectiveRegion !== "all") where.region = effectiveRegion;
 
     const entries = await db.connectionTeam.findMany(
       Object.keys(where).length > 0 ? { where } : undefined
@@ -33,7 +27,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST: Create connection team entry (admin/editor only) — with region
+// POST: Create connection team entry (admin/editor only)
 export async function POST(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
@@ -47,12 +41,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "weekStart, weekEnd, and empName are required" }, { status: 400 });
     }
 
-    // Determine effective region
-    let effectiveRegion = region || "all";
-    if (auth.region && auth.region !== "all") {
-      effectiveRegion = auth.region;
-    }
-
+    // NO region override - connection team is global
     const entry = await db.connectionTeam.create({
       data: {
         weekStart,
@@ -61,7 +50,7 @@ export async function POST(request: NextRequest) {
         empName: empName || "",
         empHrid: empHrid || "",
         monthKey: monthKey || "",
-        region: effectiveRegion,
+        region: region || "all",
       },
     });
 
@@ -72,24 +61,24 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// DELETE: Remove connection team entry (admin only)
+// DELETE: Clear ALL connection team entries (admin only) - saves config before clearing
 export async function DELETE(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
-  if (auth.role !== "admin") return forbiddenResponse();
+  if (auth.role !== "admin" && auth.role !== "editor") return forbiddenResponse();
 
   try {
-    const { searchParams } = new URL(request.url);
-    const id = Number(searchParams.get("id"));
+    // Delete ALL connection team entries
+    const allEntries = await db.connectionTeam.findMany();
+    const deletedCount = allEntries.length;
 
-    if (!id) {
-      return NextResponse.json({ error: "id is required" }, { status: 400 });
+    for (const entry of allEntries) {
+      await db.connectionTeam.delete({ where: { id: entry.id } });
     }
 
-    await db.connectionTeam.delete({ where: { id } });
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, deleted: deletedCount });
   } catch (error) {
-    console.error("Error deleting connection team entry:", error);
-    return NextResponse.json({ error: "Failed to delete connection team entry" }, { status: 500 });
+    console.error("Error clearing connection team:", error);
+    return NextResponse.json({ error: "Failed to clear connection team" }, { status: 500 });
   }
 }

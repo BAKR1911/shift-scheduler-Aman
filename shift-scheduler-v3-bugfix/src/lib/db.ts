@@ -47,8 +47,8 @@ export interface StoreScheduleEntry {
   offPersonIdx: number;
   offPersonHrid: string;
   weekNum: number;
-  isHoliday: number;
-  isManual: number;
+  isHoliday: boolean;
+  isManual: boolean;
   monthKey: string;
   region: string;
   createdAt: string;
@@ -59,7 +59,8 @@ export interface StoreSettings {
   shifts: string;
   weekStart: string;
   holidays: string;
-  summerTime: number;
+  holidayHours: string;
+  summerTime: boolean;
   summerShifts: string;
   dayHours: string;
   updatedAt: string;
@@ -197,6 +198,7 @@ async function initSchema() {
       shifts TEXT NOT NULL DEFAULT '{}',
       week_start TEXT NOT NULL DEFAULT 'Friday',
       holidays TEXT NOT NULL DEFAULT '[]',
+      holiday_hours TEXT NOT NULL DEFAULT '{}',
       summer_time INTEGER NOT NULL DEFAULT 0,
       summer_shifts TEXT NOT NULL DEFAULT '{}',
       day_hours TEXT NOT NULL DEFAULT '{}',
@@ -273,14 +275,24 @@ async function initSchema() {
   try {
     await client.execute("SELECT team_type FROM employees LIMIT 0");
   } catch {
-    try { await client.execute("ALTER TABLE employees ADD COLUMN team_type TEXT NOT NULL DEFAULT ''"); } catch { /* ignore */ }
+    try { await client.execute("ALTER TABLE employees ADD COLUMN team_type TEXT NOT NULL DEFAULT 'helpdesk'"); } catch { /* ignore */ }
   }
+
+  // Migration: assign regions to employees if all are 'all'
+  // This migration is now handled in seeding - no need to run here
 
   // Migration: add day_hours column to settings if it doesn't exist
   try {
     await client.execute("SELECT day_hours FROM settings LIMIT 0");
   } catch {
     try { await client.execute("ALTER TABLE settings ADD COLUMN day_hours TEXT NOT NULL DEFAULT '{}'"); } catch { /* ignore */ }
+  }
+
+  // Migration: add holiday_hours column to settings if it doesn't exist
+  try {
+    await client.execute("SELECT holiday_hours FROM settings LIMIT 0");
+  } catch {
+    try { await client.execute("ALTER TABLE settings ADD COLUMN holiday_hours TEXT NOT NULL DEFAULT '{}'"); } catch { /* ignore */ }
   }
 
   // Migration: add region column to schedule_entries if it doesn't exist
@@ -350,31 +362,31 @@ async function initSchema() {
     const adminHash = "$2b$10$nnr8NI0xFq9UhBgizrMHr.tZtGEPUKBklBwkiPu2e4WgeJAFHnjpq";
     await client.execute({
       sql: "INSERT INTO users (id, username, password, email, role, region) VALUES (?, ?, ?, ?, ?, ?)",
-      args: ["admin-001", "abubakr.ahmed", adminHash, "abubakr.ahmed@helpdesk.com", "admin", "all"],
+      args: ["admin-001", "abubakr.ahmed", adminHash, "abubakr.ahmed@helpdesk.com", "super_admin", "all"],
     });
-    console.log("[DB] Seeded default admin user");
+    console.log("[DB] Seeded default super admin user");
   }
 
   // Seed default employees if none exist
   const empResult = await client.execute("SELECT COUNT(*) as cnt FROM employees");
   if (empResult.rows[0]?.cnt === 0) {
     const defaultEmployees = [
-      ["Islam Rabia", "102843", 0],
-      ["Mustafa Ali", "114831", 1],
-      ["Mohamed Rashwan", "147956", 2],
-      ["Mahmoud Rabia", "102054", 3],
-      ["Mohamed Aahrar", "137254", 4],
-      ["Abo Bakr", "141866", 5],
-      ["Ahmed Khyr", "113319", 6],
-      ["Ahmed Hisham", "92458", 7],
+      ["Islam Rabia", "102843", 0, "cairo", "helpdesk"],
+      ["Mustafa Ali", "114831", 1, "cairo", "helpdesk"],
+      ["Mohamed Rashwan", "147956", 2, "delta", "helpdesk"],
+      ["Mahmoud Rabia", "102054", 3, "delta", "helpdesk"],
+      ["Mohamed Aahrar", "137254", 4, "upper_egypt", "helpdesk"],
+      ["Abo Bakr", "141866", 5, "upper_egypt", "helpdesk"],
+      ["Ahmed Khyr", "113319", 6, "cairo", "helpdesk"],
+      ["Ahmed Hisham", "92458", 7, "delta", "helpdesk"],
     ];
-    for (const [name, hrid, order] of defaultEmployees) {
+    for (const [name, hrid, order, region, teamType] of defaultEmployees) {
       await client.execute({
-        sql: `INSERT INTO employees (name, hrid, active, "order", region) VALUES (?, ?, 1, ?, 'all')`,
-        args: [name, hrid, order],
+        sql: `INSERT INTO employees (name, hrid, active, "order", region, team_type) VALUES (?, ?, 1, ?, ?, ?)`,
+        args: [name, hrid, order, region, teamType],
       });
     }
-    console.log("[DB] Seeded 8 default employees");
+    console.log("[DB] Seeded 8 default employees with regions and team types");
   }
 
   // Seed default settings if none exist
@@ -463,6 +475,7 @@ function rowToSettings(row: Record<string, unknown>): StoreSettings {
     shifts: String(row.shifts),
     weekStart: String(row.week_start),
     holidays: String(row.holidays),
+    holidayHours: row.holiday_hours ? String(row.holiday_hours) : "{}",
     summerTime: Number(row.summer_time) === 1,
     summerShifts: String(row.summer_shifts),
     dayHours: row.day_hours ? String(row.day_hours) : "{}",
@@ -534,7 +547,7 @@ export const db = {
       if (where.id) { sql += " AND id = ?"; values.push(where.id); }
       if (where.username) { sql += " AND username = ?"; values.push(where.username); }
 
-      const result = await client.execute({ sql, args: values });
+      const result = await client.execute({ sql, args: values as (string | number | boolean | null)[] });
       if (result.rows.length === 0) return null;
 
       const user = rowToUser(result.rows[0]);
@@ -616,7 +629,7 @@ export const db = {
 
       await client.execute({
         sql: `UPDATE users SET ${sets.join(", ")} WHERE ${whereKey} = ?`,
-        args: values,
+        args: values as (string | number | boolean | null)[],
       });
 
       return await db.user.findUnique(args) as StoreUser;
@@ -629,7 +642,7 @@ export const db = {
       const whereKey = args.where.id ? "id" : "username";
       await client.execute({
         sql: `DELETE FROM users WHERE ${whereKey} = ?`,
-        args: [args.where[whereKey]],
+        args: [args.where[whereKey]] as (string | number | boolean | null)[],
       });
 
       return { success: true };
@@ -670,7 +683,7 @@ export const db = {
       }
       sql += " LIMIT 1";
 
-      const result = await client.execute({ sql, args: values });
+      const result = await client.execute({ sql, args: values as (string | number | boolean | null)[] });
       if (result.rows.length === 0) return null;
 
       const emp = rowToEmployee(result.rows[0] as Record<string, unknown>);
@@ -726,7 +739,7 @@ export const db = {
       values.push(args.where.id);
       await client.execute({
         sql: `UPDATE employees SET ${sets.join(", ")} WHERE id = ?`,
-        args: values,
+        args: values as (string | number | boolean | null)[],
       });
 
       return await db.employee.findUnique(args) as StoreEmployee;
@@ -738,7 +751,7 @@ export const db = {
 
       await client.execute({
         sql: "DELETE FROM employees WHERE id = ?",
-        args: [args.where.id],
+        args: [args.where.id] as (string | number | boolean | null)[],
       });
 
       return { success: true };
@@ -750,7 +763,7 @@ export const db = {
 
       const result = await client.execute({
         sql: "SELECT * FROM employees WHERE id = ?",
-        args: [args.where.id],
+        args: [args.where.id] as (string | number | boolean | null)[],
       });
       if (result.rows.length === 0) return null;
       return rowToEmployee(result.rows[0] as Record<string, unknown>);
@@ -814,7 +827,7 @@ export const db = {
         sql += ` ORDER BY ${col} ${dir === "desc" ? "DESC" : "ASC"}`;
       }
 
-      const result = await client.execute({ sql, args: values });
+      const result = await client.execute({ sql, args: values as (string | number | boolean | null)[] });
       return result.rows.map((r) => rowToEntry(r as Record<string, unknown>));
     },
 
@@ -828,7 +841,7 @@ export const db = {
       if (where.date) { sql += " AND date = ?"; values.push(where.date); }
       sql += " LIMIT 1";
 
-      const result = await client.execute({ sql, args: values });
+      const result = await client.execute({ sql, args: values as (string | number | boolean | null)[] });
       if (result.rows.length === 0) return null;
       return rowToEntry(result.rows[0] as Record<string, unknown>);
     },
@@ -882,7 +895,7 @@ export const db = {
         );
       }
 
-      const result = await client.execute({ sql, args: values });
+      const result = await client.execute({ sql, args: values as (string | number | boolean | null)[] });
       return { count: result.rowsAffected };
     },
 
@@ -902,7 +915,7 @@ export const db = {
       values.push(args.where.id);
       await client.execute({
         sql: `UPDATE schedule_entries SET ${sets.join(", ")} WHERE id = ?`,
-        args: values,
+        args: values as (string | number | boolean | null)[],
       });
 
       return { success: true };
@@ -915,12 +928,12 @@ export const db = {
       if (args.where.date) {
         await client.execute({
           sql: "DELETE FROM schedule_entries WHERE date = ?",
-          args: [args.where.date],
+          args: [args.where.date] as (string | number | boolean | null)[],
         });
       } else if (args.where.id) {
         await client.execute({
           sql: "DELETE FROM schedule_entries WHERE id = ?",
-          args: [args.where.id],
+          args: [args.where.id] as (string | number | boolean | null)[],
         });
       }
 
@@ -944,15 +957,34 @@ export const db = {
       return result.rows.map((r) => rowToEntry(r as Record<string, unknown>));
     },
 
-    async updateHoursBatch(updates: Array<{id: number, start: string, end: string, hours: number}>) {
+    async updateHoursBatch(updates: Array<{id: number, start: string, end: string, hours: number, isHoliday?: boolean}>) {
       await ensureInit();
       const client = getClient();
+      console.log("[updateHoursBatch] Processing", updates.length, "updates");
+
+      let updatedCount = 0;
       for (const u of updates) {
-        await client.execute({
-          sql: 'UPDATE schedule_entries SET start = ?, "end" = ?, hours = ? WHERE id = ?',
-          args: [u.start, u.end, u.hours, u.id],
-        });
+        if (u.isHoliday !== undefined) {
+          console.log(`[updateHoursBatch] Updating entry ${u.id}:`, {
+            start: u.start,
+            end: u.end,
+            hours: u.hours,
+            isHoliday: u.isHoliday,
+          });
+          await client.execute({
+            sql: 'UPDATE schedule_entries SET start = ?, "end" = ?, hours = ?, is_holiday = ? WHERE id = ?',
+            args: [u.start, u.end, u.hours, u.isHoliday ? 1 : 0, u.id],
+          });
+          updatedCount++;
+        } else {
+          await client.execute({
+            sql: 'UPDATE schedule_entries SET start = ?, "end" = ?, hours = ? WHERE id = ?',
+            args: [u.start, u.end, u.hours, u.id],
+          });
+          updatedCount++;
+        }
       }
+      console.log(`[updateHoursBatch] Updated ${updatedCount} entries`);
       return { count: updates.length };
     },
 
@@ -1005,7 +1037,7 @@ export const db = {
 
       if (values.length === 0) return { count: 0 };
 
-      const result = await client.execute({ sql, args: values });
+      const result = await client.execute({ sql, args: values as (string | number | boolean | null)[] });
       return { count: result.rowsAffected };
     },
   },
@@ -1033,11 +1065,12 @@ export const db = {
       const existing = await client.execute("SELECT COUNT(*) as cnt FROM settings WHERE id = 1");
       if (Number(existing.rows[0]?.cnt) > 0) {
         await client.execute({
-          sql: "UPDATE settings SET shifts = ?, week_start = ?, holidays = ?, summer_time = ?, summer_shifts = ?, day_hours = ?, updated_at = ? WHERE id = 1",
+          sql: "UPDATE settings SET shifts = ?, week_start = ?, holidays = ?, holiday_hours = ?, summer_time = ?, summer_shifts = ?, day_hours = ?, updated_at = ? WHERE id = 1",
           args: [
             args.update.shifts || args.create.shifts,
             args.update.weekStart || args.create.weekStart,
             args.update.holidays || args.create.holidays,
+            args.update.holidayHours || args.create.holidayHours || "{}",
             (args.update.summerTime ?? args.create.summerTime) ? 1 : 0,
             args.update.summerShifts || args.create.summerShifts,
             args.update.dayHours || args.create.dayHours || "{}",
@@ -1046,9 +1079,10 @@ export const db = {
         });
       } else {
         await client.execute({
-          sql: "INSERT INTO settings (id, shifts, week_start, holidays, summer_time, summer_shifts, day_hours, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?)",
+          sql: "INSERT INTO settings (id, shifts, week_start, holidays, holiday_hours, summer_time, summer_shifts, day_hours, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)",
           args: [
             args.create.shifts, args.create.weekStart, args.create.holidays,
+            args.create.holidayHours || "{}",
             args.create.summerTime ? 1 : 0, args.create.summerShifts, args.create.dayHours || "{}", now,
           ],
         });
@@ -1081,7 +1115,7 @@ export const db = {
         sql += ` ORDER BY ${col} ${dir === "desc" ? "DESC" : "ASC"}`;
       }
 
-      const result = await client.execute({ sql, args: values });
+      const result = await client.execute({ sql, args: values as (string | number | boolean | null)[] });
       return result.rows.map((r) => rowToGenMonth(r as Record<string, unknown>));
     },
 
@@ -1139,7 +1173,7 @@ export const db = {
       }
       sql += " ORDER BY week_start ASC";
 
-      const result = await client.execute({ sql, args: values });
+      const result = await client.execute({ sql, args: values as (string | number | boolean | null)[] });
       return result.rows.map((r) => rowToConnectionEntry(r as Record<string, unknown>));
     },
 
@@ -1198,7 +1232,7 @@ export const db = {
       }
       sql += " ORDER BY week_start ASC";
 
-      const result = await client.execute({ sql, args: values });
+      const result = await client.execute({ sql, args: values as (string | number | boolean | null)[] });
       return result.rows.map((r) => rowToRegionRotation(r as Record<string, unknown>));
     },
 
@@ -1234,7 +1268,7 @@ export const db = {
       values.push(args.where.id);
       await client.execute({
         sql: `UPDATE region_rotation SET ${sets.join(", ")} WHERE id = ?`,
-        args: values,
+        args: values as (string | number | boolean | null)[],
       });
 
       return { success: true };
@@ -1267,7 +1301,7 @@ export const db = {
       if (args?.where?.date) { sql += " AND date = ?"; values.push(args.where.date); }
       sql += " ORDER BY date ASC";
 
-      const result = await client.execute({ sql, args: values });
+      const result = await client.execute({ sql, args: values as (string | number | boolean | null)[] });
       return result.rows.map((r) => rowToConnectionAssignment(r as Record<string, unknown>));
     },
 
@@ -1308,7 +1342,7 @@ export const db = {
       values.push(args.where.id);
       await client.execute({
         sql: `UPDATE connection_assignments SET ${sets.join(", ")} WHERE assignment_id = ?`,
-        args: values,
+        args: values as (string | number | boolean | null)[],
       });
 
       return { success: true };
@@ -1352,7 +1386,7 @@ export const db = {
         WHERE employee_id = ?${dateFilter}
       `;
 
-      const result = await client.execute({ sql, args: values });
+      const result = await client.execute({ sql, args: values as (string | number | boolean | null)[] });
 
       if (result.rows.length === 0) {
         return { employeeId: args.employeeId, assignmentCount: 0, totalHours: 0 };

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, unauthorizedResponse } from "@/lib/auth";
 import { db } from "@/lib/db";
 
-// GET: Fetch connection assignments and optional totals
+// GET: Fetch connection assignments and optional totals (NO region filtering for non-admin)
 //   ?month=2026-04          → monthly totals per employee
 //   ?week=2026-04-04        → weekly totals per employee
 //   ?month=2026-04&totals   → entries + monthly totals
@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
     const employeeId = searchParams.get("employeeId");
     const totalsOnly = searchParams.get("totals") === "true";
 
-    // Fetch entries
+    // NO region filtering - connection team is global workforce
     const where: { weekStart?: string; employeeId?: number; regionCovered?: string; date?: string } = {};
     if (weekStart) where.weekStart = weekStart;
     if (employeeId) where.employeeId = Number(employeeId);
@@ -27,11 +27,6 @@ export async function GET(request: NextRequest) {
     let entries = await db.connectionAssignment.findMany(
       Object.keys(where).length > 0 ? { where } : undefined
     );
-
-    // Non-admin with a region: filter entries by their region assignment
-    if (auth.role !== "admin" && auth.region && auth.region !== "all") {
-      entries = entries.filter((e) => e.regionCovered === auth.region);
-    }
 
     // If totalsOnly or both month/week requested, compute per-employee totals
     if (totalsOnly || monthKey || weekStart) {

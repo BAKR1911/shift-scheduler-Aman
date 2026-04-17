@@ -24,6 +24,7 @@ export async function GET(request: NextRequest) {
         shifts: defaultShifts,
         weekStart: "Friday",
         holidays: [],
+        holidayHours: {},
         summerTime: false,
         summerShifts: {
           Weekday: { start: "05:00 PM", end: "11:00 PM", hours: 6 },
@@ -39,6 +40,7 @@ export async function GET(request: NextRequest) {
       shifts: JSON.parse(settings.shifts),
       weekStart: settings.weekStart,
       holidays: JSON.parse(settings.holidays),
+      holidayHours: JSON.parse(settings.holidayHours),
       summerTime: settings.summerTime,
       summerShifts: JSON.parse(settings.summerShifts),
       dayHours: JSON.parse(settings.dayHours || "{}"),
@@ -57,7 +59,12 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { shifts, weekStart, holidays, summerTime, summerShifts, dayHours } = body;
+    const { shifts, weekStart, holidays, holidayHours, summerTime, summerShifts, dayHours } = body;
+
+    console.log("[Settings API] POST request:", {
+      holidaysCount: holidays?.length,
+      holidayHoursKeys: Object.keys(holidayHours || {}),
+    });
 
     const result = await db.settings.upsert({
       where: { id: 1 },
@@ -65,6 +72,7 @@ export async function POST(request: NextRequest) {
         shifts: JSON.stringify(shifts),
         weekStart: weekStart || "Friday",
         holidays: JSON.stringify(holidays || []),
+        holidayHours: JSON.stringify(holidayHours || {}),
         summerTime: Boolean(summerTime),
         summerShifts: JSON.stringify(summerShifts || {}),
         dayHours: JSON.stringify(dayHours || {}),
@@ -74,42 +82,64 @@ export async function POST(request: NextRequest) {
         shifts: JSON.stringify(shifts),
         weekStart: weekStart || "Friday",
         holidays: JSON.stringify(holidays || []),
+        holidayHours: JSON.stringify(holidayHours || {}),
         summerTime: Boolean(summerTime),
         summerShifts: JSON.stringify(summerShifts || {}),
         dayHours: JSON.stringify(dayHours || {}),
       },
     });
 
-    // Recalculate all schedule entries with new settings
+    console.log("[Settings API] Saved to DB - holiday_hours:", result.holidayHours);
+
+    // IMPORTANT: Recalculate ALL schedule entries with new settings
+    // This ensures Shift Settings is the "dynamo" that drives the schedule
     const allDbEntries = await db.scheduleEntry.findAll();
+    console.log("[Settings API] Total entries in DB:", allDbEntries.length);
+
     if (allDbEntries.length > 0) {
       const settingsObj: import("@/lib/scheduler").Settings = {
         shifts: JSON.parse(result.shifts),
         weekStart: result.weekStart,
         holidays: JSON.parse(result.holidays),
+        holidayHours: JSON.parse(result.holidayHours),
         summerTime: result.summerTime,
         summerShifts: JSON.parse(result.summerShifts),
         dayHours: JSON.parse(result.dayHours || "{}"),
       };
 
+      console.log("[Settings API] Settings loaded:", {
+        holidays: settingsObj.holidays,
+        holidayHours: settingsObj.holidayHours,
+      });
+
+      // Convert DB entries to scheduler format (reset isHoliday - will be recalculated)
       const schedulerEntries: import("@/lib/scheduler").ScheduleEntry[] = allDbEntries.map(e => ({
         date: e.date, dayName: e.dayName, dayType: e.dayType,
         empIdx: e.empIdx, empName: e.empName, empHrid: e.empHrid,
         start: e.start, end: e.end, hours: e.hours,
         offPerson: e.offPerson, offPersonIdx: e.offPersonIdx, offPersonHrid: e.offPersonHrid,
-        weekNum: e.weekNum, isHoliday: e.isHoliday, isManual: e.isManual,
+        weekNum: e.weekNum, isHoliday: false, isManual: e.isManual, // Reset isHoliday - will be recalculated
       }));
 
+      console.log("[Settings API] Entries before recalc:", schedulerEntries.slice(0, 3).map(e => ({ date: e.date, hours: e.hours, isHoliday: e.isHoliday })));
+
+      // Recalculate hours based on settings (holidays determined from settings.holidays)
       const recalced = recalcScheduleHours(schedulerEntries, settingsObj);
 
-      const batchUpdates: Array<{id: number, start: string, end: string, hours: number}> = [];
+      console.log("[Settings API] Entries after recalc:", recalced.slice(0, 3).map(e => ({ date: e.date, hours: e.hours, isHoliday: e.isHoliday })));
+
+      // Prepare batch updates
+      const batchUpdates: Array<{id: number, start: string, end: string, hours: number, isHoliday: boolean}> = [];
       for (let i = 0; i < recalced.length; i++) {
         const re = recalced[i];
         const orig = allDbEntries[i];
-        if (re.start !== orig.start || re.end !== orig.end || re.hours !== orig.hours) {
-          batchUpdates.push({ id: orig.id, start: re.start, end: re.end, hours: re.hours });
+        if (re.start !== orig.start || re.end !== orig.end || re.hours !== orig.hours || re.isHoliday !== orig.isHoliday) {
+          batchUpdates.push({ id: orig.id, start: re.start, end: re.end, hours: re.hours, isHoliday: re.isHoliday });
         }
       }
+
+      console.log("[Settings API] Batch updates needed:", batchUpdates.length);
+      console.log("[Settings API] Sample updates:", batchUpdates.slice(0, 5));
 
       if (batchUpdates.length > 0) {
         await db.scheduleEntry.updateHoursBatch(batchUpdates);

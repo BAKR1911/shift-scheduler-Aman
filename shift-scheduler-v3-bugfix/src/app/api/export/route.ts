@@ -369,7 +369,7 @@ export async function POST(request: NextRequest) {
     [5, 24, 12, 14, 30, 14, 14].forEach((w, i) => ws3.getColumn(i + 1).width = w);
 
     ws3.mergeCells("A1:G1");
-    ws3.getCell("A1").value = `Connection Team - تيم الكونكشن (${period})`;
+    ws3.getCell("A1").value = `Connection Team (${period})`;
     ws3.getCell("A1").font = { size: 16, bold: true, color: { argb: TEAL } };
     ws3.getRow(1).height = 36;
 
