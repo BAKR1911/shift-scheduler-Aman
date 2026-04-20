@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, unauthorizedResponse, forbiddenResponse, isAdmin, resetUserPassword } from "@/lib/auth";
 

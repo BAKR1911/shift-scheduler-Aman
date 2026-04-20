@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, unauthorizedResponse } from "@/lib/auth";
 import { computeLocalStats, computeOffWeeks } from "@/lib/scheduler";

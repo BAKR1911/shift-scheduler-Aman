@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, unauthorizedResponse, isAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -47,13 +49,19 @@ export async function GET(request: NextRequest) {
       );
 
       if (totalsOnly) {
-        return NextResponse.json({ totals: perEmployee });
+        return NextResponse.json({ totals: perEmployee }, {
+          headers: { "Cache-Control": "no-store, no-cache, must-revalidate" },
+        });
       }
 
-      return NextResponse.json({ entries, totals: perEmployee });
+      return NextResponse.json({ entries, totals: perEmployee }, {
+        headers: { "Cache-Control": "no-store, no-cache, must-revalidate" },
+      });
     }
 
-    return NextResponse.json({ entries });
+    return NextResponse.json({ entries }, {
+      headers: { "Cache-Control": "no-store, no-cache, must-revalidate" },
+    });
   } catch (error) {
     console.error("Error fetching connection assignments:", error);
     return NextResponse.json({ error: "Failed to fetch connection assignments" }, { status: 500 });

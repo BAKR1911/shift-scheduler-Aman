@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, unauthorizedResponse, forbiddenResponse, isAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -44,6 +46,8 @@ export async function GET(request: NextRequest) {
       summerTime: settings.summerTime,
       summerShifts: JSON.parse(settings.summerShifts),
       dayHours: JSON.parse(settings.dayHours || "{}"),
+    }, {
+      headers: { "Cache-Control": "no-store, no-cache, must-revalidate" },
     });
   } catch (error) {
     console.error("Error fetching settings:", error);

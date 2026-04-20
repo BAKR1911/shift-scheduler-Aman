@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, unauthorizedResponse, forbiddenResponse, isAdmin } from "@/lib/auth";
 import { generateScheduleForMonth, generateScheduleForWeek, computeLocalStats, computeOffWeeks } from "@/lib/scheduler";
@@ -90,6 +92,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       entries: filteredEntries,
       generatedMonths: genMonths.map((g) => g.monthKey),
+    }, {
+      headers: { "Cache-Control": "no-store, no-cache, must-revalidate" },
     });
   } catch (error) {
     console.error("Error fetching schedule entries:", error);

@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, unauthorizedResponse, forbiddenResponse, isAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -20,7 +22,9 @@ export async function GET(request: NextRequest) {
       Object.keys(where).length > 0 ? { where } : undefined
     );
 
-    return NextResponse.json({ entries });
+    return NextResponse.json({ entries }, {
+      headers: { "Cache-Control": "no-store, no-cache, must-revalidate" },
+    });
   } catch (error) {
     console.error("Error fetching connection team:", error);
     return NextResponse.json({ error: "Failed to fetch connection team" }, { status: 500 });

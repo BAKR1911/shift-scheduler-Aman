@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, isAdmin } from "@/lib/auth";
 import { generateConnectionTeamSchedule } from "@/lib/scheduler";

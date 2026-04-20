@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, unauthorizedResponse } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -236,19 +238,20 @@ export async function POST(request: NextRequest) {
     ws2.columns = [
       { header: "Employee", key: "name", width: 24 },
       { header: "HRID", key: "hrid", width: 12 },
+      { header: "Region", key: "region", width: 14 },
       { header: "Work Days", key: "workDays", width: 12 },
       { header: "Total Hours", key: "totalHours", width: 12 },
     ];
 
     // Add title
-    ws2.mergeCells("A1:D1");
+    ws2.mergeCells("A1:E1");
     const titleCell2 = ws2.getCell("A1");
     titleCell2.value = `Employee Summary${regionLabel}`;
     titleCell2.font = { size: 16, bold: true, color: { argb: "059669" } };
     titleCell2.alignment = { horizontal: "center", vertical: "middle" };
     ws2.getRow(1).height = 36;
 
-    ws2.mergeCells("A2:D2");
+    ws2.mergeCells("A2:E2");
     ws2.getCell("A2").value = periodText;
     ws2.getCell("A2").font = { size: 12, italic: true, color: { argb: "64748B" } };
     ws2.getCell("A2").alignment = { horizontal: "center" };
@@ -256,7 +259,7 @@ export async function POST(request: NextRequest) {
 
     // Style header
     const headerRow2 = 4;
-    const headers2 = ["Employee", "HRID", "Work Days", "Total Hours"];
+    const headers2 = ["Employee", "HRID", "Region", "Work Days", "Total Hours"];
     headers2.forEach((h, i) => {
       const cell = ws2.getCell(headerRow2, i + 1);
       cell.value = h;
@@ -267,13 +270,13 @@ export async function POST(request: NextRequest) {
     ws2.getRow(headerRow2).height = 28;
 
     // Calculate employee stats (skip placeholder rows)
-    const employeeStats = new Map<string, { name: string; hrid: string; workDays: number; totalHours: number }>();
+    const employeeStats = new Map<string, { name: string; hrid: string; region: string; workDays: number; totalHours: number }>();
     
     helpdeskData.forEach((e) => {
       if (e.empName === "—") return; // Skip placeholder rows
       const key = `${e.empHrid}_${e.empName}`;
       if (!employeeStats.has(key)) {
-        employeeStats.set(key, { name: e.empName, hrid: e.empHrid, workDays: 0, totalHours: 0 });
+        employeeStats.set(key, { name: e.empName, hrid: e.empHrid, region: e.region || "all", workDays: 0, totalHours: 0 });
       }
       const stats = employeeStats.get(key)!;
       if (e.hours > 0) {
@@ -296,15 +299,20 @@ export async function POST(request: NextRequest) {
       ws2.getCell(empRow, 2).alignment = { horizontal: "center", vertical: "middle" };
       ws2.getCell(empRow, 2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowFill } };
 
-      ws2.getCell(empRow, 3).value = stats.workDays;
+      ws2.getCell(empRow, 3).value = stats.region ? stats.region.toUpperCase() : "ALL";
       ws2.getCell(empRow, 3).alignment = { horizontal: "center", vertical: "middle" };
       ws2.getCell(empRow, 3).fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowFill } };
+      ws2.getCell(empRow, 3).font = { size: 9, color: { argb: "6B7280" } };
 
-      ws2.getCell(empRow, 4).value = stats.totalHours.toFixed(1);
-      ws2.getCell(empRow, 4).numFmt = "0.0";
+      ws2.getCell(empRow, 4).value = stats.workDays;
       ws2.getCell(empRow, 4).alignment = { horizontal: "center", vertical: "middle" };
       ws2.getCell(empRow, 4).fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowFill } };
-      ws2.getCell(empRow, 4).font = { color: { argb: "059669" }, bold: true };
+
+      ws2.getCell(empRow, 5).value = stats.totalHours.toFixed(1);
+      ws2.getCell(empRow, 5).numFmt = "0.0";
+      ws2.getCell(empRow, 5).alignment = { horizontal: "center", vertical: "middle" };
+      ws2.getCell(empRow, 5).fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowFill } };
+      ws2.getCell(empRow, 5).font = { color: { argb: "059669" }, bold: true };
 
       empRow++;
     }
@@ -315,7 +323,7 @@ export async function POST(request: NextRequest) {
     const totalWorkDays = allEmps.reduce((sum, e) => sum + e.workDays, 0);
     const totalEmpHours = allEmps.reduce((sum, e) => sum + e.totalHours, 0);
 
-    ws2.mergeCells(allEmpSummaryRow, 1, allEmpSummaryRow, 4);
+    ws2.mergeCells(allEmpSummaryRow, 1, allEmpSummaryRow, 5);
     const summaryCell2 = ws2.getCell(allEmpSummaryRow, 1);
     summaryCell2.value = `TOTAL: ${allEmps.length} employees | ${totalWorkDays} work days | ${totalEmpHours.toFixed(1)} total hours`;
     summaryCell2.font = { size: 12, bold: true, color: { argb: "FFFFFF" } };

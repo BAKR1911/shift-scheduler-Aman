@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, unauthorizedResponse, forbiddenResponse, isAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -15,10 +17,14 @@ export async function GET(request: NextRequest) {
     // Non-admin users with a specific region only see their region's employees (STRICT)
     if (!isAdmin(auth.role) && auth.region && auth.region !== "all") {
       const filtered = allEmployees.filter((e) => e.region === auth.region);
-      return NextResponse.json({ employees: filtered });
+      return NextResponse.json({ employees: filtered }, {
+        headers: { "Cache-Control": "no-store, no-cache, must-revalidate" },
+      });
     }
 
-    return NextResponse.json({ employees: allEmployees });
+    return NextResponse.json({ employees: allEmployees }, {
+      headers: { "Cache-Control": "no-store, no-cache, must-revalidate" },
+    });
   } catch (error) {
     console.error("Error fetching employees:", error);
     return NextResponse.json({ error: "Failed to fetch employees" }, { status: 500 });

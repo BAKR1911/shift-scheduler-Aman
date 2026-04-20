@@ -288,7 +288,6 @@ function LoginScreen({
               <Button type="submit" disabled={loginLoading} className="w-full h-11 bg-gradient-to-r from-[#0F172A] to-[#1D4ED8] hover:from-emerald-700 hover:to-emerald-600 hover:shadow-lg hover:shadow-emerald-200 dark:hover:shadow-emerald-900/30 transition-all duration-200 text-white font-semibold text-sm">
                 {loginLoading ? <span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Signing in...</span> : "Sign In"}
               </Button>
-              <p className="text-center text-xs text-slate-400 mt-3">Powered by Z.ai Shift Scheduler</p>
             </form>
           </CardContent>
         </Card>
@@ -451,8 +450,15 @@ export default function ShiftSchedulerPage() {
   // Active tab: "helpdesk" or "connection"
   const [activeTab, setActiveTab] = useState<"helpdesk" | "connection">("helpdesk");
 
+  // Auto-switch connection users to connection tab
+  useEffect(() => {
+    if (user?.role === "connection" && activeTab === "helpdesk") {
+      setActiveTab("connection");
+    }
+  }, [user?.role, activeTab]);
+
   // Role helpers
-  const canEdit = user && (user.role === "admin" || user.role === "super_admin" || user.role === "editor");
+  const canEdit = user && (user.role === "admin" || user.role === "super_admin" || user.role === "editor" || user.role === "connection");
   const canAdmin = user && (user.role === "admin" || user.role === "super_admin");
 
   // Authenticated fetch wrapper
@@ -797,13 +803,30 @@ export default function ShiftSchedulerPage() {
 
     try {
       await authFetch("/api/settings", { method: "POST", body: JSON.stringify(newSettings) });
-      setSettings(newSettings);
+
+      // CRITICAL: Re-fetch settings from server to ensure client state matches DB exactly
+      // The server recalculates schedule entries on settings save, so we need fresh data
+      const settRes = await authFetch("/api/settings");
+      if (settRes.ok) {
+        const freshSettings = await settRes.json();
+        setSettings({
+          ...freshSettings,
+          dayHours: freshSettings.dayHours || {},
+          holidayHours: freshSettings.holidayHours || {},
+        });
+        console.log("[toggleHoliday] Re-fetched settings from server:", { holidays: freshSettings.holidays, holidayHours: freshSettings.holidayHours });
+      } else {
+        setSettings(newSettings);
+      }
 
       // IMPORTANT: Fetch entries from DB to see updated isHoliday and hours
       console.log("[toggleHoliday] Fetching updated entries...");
       await fetchScheduleEntries();
       console.log("[toggleHoliday] Fetching connection team...");
       await fetchConnectionTeam();
+      // Also refresh connection assignments and balance
+      await fetchConnAssignments();
+      await fetchBalance();
 
       toast({ title: "Updated", description: `${date} ${newHoliday ? "marked as holiday" : "unmarked as holiday"}` });
     } catch {
@@ -1737,7 +1760,15 @@ export default function ShiftSchedulerPage() {
   const totalHolidays = filteredEntries.filter((e) => e.isHoliday).length;
   const totalWeeks = weekGroups.length;
 
-  const roleColor = user?.role === "super_admin" ? "bg-purple-700" : user?.role === "admin" ? "bg-red-500" : user?.role === "editor" ? "bg-amber-500" : "bg-slate-500";
+  // ===== Connection Team Computed Stats =====
+  const connectionMonthEntries = connectionTeam.filter((ct) => ct.monthKey === selectedMonth);
+  const connectionTotalHours = connectionMonthEntries.reduce((sum, ct) => sum + calcConnectionWeekHours(ct.weekStart, ct.weekEnd), 0);
+  const connectionUniqueMembers = connectionMonthEntries.length > 0
+    ? new Set(connectionMonthEntries.map(ct => ct.empName)).size
+    : connectionTeamEmps.length;
+  const connectionAvgHours = connectionUniqueMembers > 0 ? connectionTotalHours / connectionUniqueMembers : 0;
+
+  const roleColor = user?.role === "super_admin" ? "bg-purple-700" : user?.role === "admin" ? "bg-red-500" : user?.role === "editor" ? "bg-amber-500" : user?.role === "connection" ? "bg-teal-500" : "bg-slate-500";
 
   // ===== Build week options for dialogs =====
   const buildWeekOptions = () => {
@@ -1799,13 +1830,8 @@ export default function ShiftSchedulerPage() {
                 <h1 className="text-lg sm:text-xl font-bold tracking-tight">
                   {activeTab === "helpdesk" ? "IT Helpdesk Shift Scheduler" : "Connection Team Weekly Assignments"}
                 </h1>
-                {activeTab === "helpdesk" && balance && (
-                  <Badge variant="outline" className={`ml-2 hidden sm:inline-flex ${balance.status === "green" ? "border-green-500 text-green-400 bg-green-500/10" : balance.status === "yellow" ? "border-yellow-500 text-yellow-400 bg-yellow-500/10" : "border-red-500 text-red-400 bg-red-500/10"}`}>
-                    <CheckCircle className="h-3 w-3 mr-1" />{balance.variance.toFixed(1)}h variance
-                  </Badge>
-                )}
+
                 <div className="hidden md:flex items-center gap-2 ml-2">
-                  <Badge variant="outline" className="border-slate-600 text-slate-300 bg-slate-800/50 text-[10px] px-2"><Calendar className="h-3 w-3 mr-1" />{generatedMonths.length} months</Badge>
                   <Badge variant="outline" className="border-slate-600 text-slate-300 bg-slate-800/50 text-[10px] px-2"><Users className="h-3 w-3 mr-1" />{employees.length} staff</Badge>
                 </div>
               </div>
@@ -1899,10 +1925,10 @@ export default function ShiftSchedulerPage() {
               )}
               {activeTab === "helpdesk" && (
               <div className="ml-auto">
-                <Select value={selectedRegion} onValueChange={setSelectedRegion} disabled={user?.role !== "admin" && user?.role !== "super_admin" && user?.region !== "all"}>
+                <Select value={selectedRegion} onValueChange={setSelectedRegion} disabled={user?.role !== "admin" && user?.role !== "super_admin" && user?.role !== "editor" && user?.role !== "connection" && user?.region !== "all"}>
                   <SelectTrigger className="w-[180px] h-9 text-xs"><MapPin className="h-3.5 w-3.5 mr-1" /><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {Object.entries(REGIONS).map(([key, label]) => (
+                    {Object.entries(REGIONS).filter(([key]) => key !== "all").map(([key, label]) => (
                       <SelectItem key={key} value={key}>{label}</SelectItem>
                     ))}
                   </SelectContent>
@@ -1916,6 +1942,7 @@ export default function ShiftSchedulerPage() {
         {/* TAB SWITCHER */}
         <div className="max-w-7xl mx-auto px-4 mt-4">
           <div className="flex gap-1 bg-slate-200 dark:bg-slate-800 p-1 rounded-lg w-fit">
+            {user?.role !== "connection" && (
             <Button
               variant={activeTab === "helpdesk" ? "default" : "ghost"}
               size="sm"
@@ -1924,6 +1951,7 @@ export default function ShiftSchedulerPage() {
             >
               <HeadphonesIcon className="h-4 w-4 mr-2" />Helpdesk Schedule
             </Button>
+            )}
             <Button
               variant={activeTab === "connection" ? "default" : "ghost"}
               size="sm"
@@ -1955,42 +1983,6 @@ export default function ShiftSchedulerPage() {
               </div>
             </div>
           )}
-        </div>
-        )}
-
-        {/* SCHEDULE STATISTICS DASHBOARD */}
-        {activeTab === "helpdesk" && entries.length > 0 && (
-        <div className="max-w-7xl mx-auto w-full px-4 mt-4 mb-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <Card className="bg-gradient-to-br from-emerald-50 to-green-50 dark:from-emerald-950/40 dark:to-green-950/40 border-emerald-200 dark:border-emerald-800 p-4 shadow-sm hover:shadow-md transition-shadow">
-              <div className="flex items-center gap-2 mb-1"><TrendingUp className="h-4 w-4 text-emerald-600 dark:text-emerald-400" /><span className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">Total Hours</span></div>
-              <div className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">
-                {entries.reduce((sum: number, e: any) => sum + (e.isHoliday ? 0 : e.hours), 0).toFixed(1)}
-              </div>
-            </Card>
-            <Card className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-950/40 dark:to-indigo-950/40 border-blue-200 dark:border-blue-800 p-4 shadow-sm hover:shadow-md transition-shadow">
-              <div className="flex items-center gap-2 mb-1"><CalendarDays className="h-4 w-4 text-blue-600 dark:text-blue-400" /><span className="text-xs text-blue-600 dark:text-blue-400 font-medium">Work Days</span></div>
-              <div className="text-2xl font-bold text-blue-700 dark:text-blue-300">
-                {entries.filter((e: any) => !e.isHoliday && e.hours > 0).length}
-              </div>
-            </Card>
-            <Card className="bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/40 dark:to-orange-950/40 border-amber-200 dark:border-amber-800 p-4 shadow-sm hover:shadow-md transition-shadow">
-              <div className="flex items-center gap-2 mb-1"><Users className="h-4 w-4 text-amber-600 dark:text-amber-400" /><span className="text-xs text-amber-600 dark:text-amber-400 font-medium">Avg Hours/Person</span></div>
-              <div className="text-2xl font-bold text-amber-700 dark:text-amber-300">
-                {(() => {
-                  const totalH = entries.reduce((s: number, e: any) => s + (e.isHoliday ? 0 : e.hours), 0);
-                  const emps = new Set(entries.filter((e: any) => e.hours > 0).map((e: any) => e.empName));
-                  return emps.size > 0 ? (totalH / emps.size).toFixed(1) : "0";
-                })()}
-              </div>
-            </Card>
-            <Card className="bg-gradient-to-br from-rose-50 to-pink-50 dark:from-rose-950/40 dark:to-pink-950/40 border-rose-200 dark:border-rose-800 p-4 shadow-sm hover:shadow-md transition-shadow">
-              <div className="flex items-center gap-2 mb-1"><Sun className="h-4 w-4 text-rose-600 dark:text-rose-400" /><span className="text-xs text-rose-600 dark:text-rose-400 font-medium">Holidays</span></div>
-              <div className="text-2xl font-bold text-rose-700 dark:text-rose-300">
-                {entries.filter((e: any) => e.isHoliday).length}
-              </div>
-            </Card>
-          </div>
         </div>
         )}
 
@@ -2099,10 +2091,10 @@ export default function ShiftSchedulerPage() {
               <div className="p-4">
                 {/* Stats Cards */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                  <Card className="shadow-sm"><CardContent className="p-3 text-center"><div className="text-xl font-bold text-teal-600">{connectionTeam.length}</div><div className="text-xs text-slate-500">Total Members</div></CardContent></Card>
-                  <Card className="shadow-sm"><CardContent className="p-3 text-center"><div className="text-xl font-bold text-teal-600">{connAssignmentTotals.reduce((sum, t) => sum + (t.weekly?.assignmentCount || 0), 0)}</div><div className="text-xs text-slate-500">Weekly Assignments</div></CardContent></Card>
-                  <Card className="shadow-sm"><CardContent className="p-3 text-center"><div className="text-xl font-bold text-teal-600">{connAssignmentTotals.reduce((sum, t) => sum + (t.weekly?.totalHours || 0), 0).toFixed(0)}h</div><div className="text-xs text-slate-500">Total Hours</div></CardContent></Card>
-                  <Card className="shadow-sm"><CardContent className="p-3 text-center"><div className="text-xl font-bold text-teal-600">{connAssignmentTotals.length > 0 ? (connAssignmentTotals.reduce((sum, t) => sum + (t.weekly?.totalHours || 0), 0) / connAssignmentTotals.length).toFixed(0) : 0}h</div><div className="text-xs text-slate-500">Avg Hours/Member</div></CardContent></Card>
+                  <Card className="shadow-sm"><CardContent className="p-3 text-center"><div className="text-xl font-bold text-teal-600">{connectionTeamEmps.length}</div><div className="text-xs text-slate-500">Total Members</div></CardContent></Card>
+                  <Card className="shadow-sm"><CardContent className="p-3 text-center"><div className="text-xl font-bold text-teal-600">{connectionMonthEntries.length}</div><div className="text-xs text-slate-500">Weeks Assigned</div></CardContent></Card>
+                  <Card className="shadow-sm"><CardContent className="p-3 text-center"><div className="text-xl font-bold text-teal-600">{connectionTotalHours.toFixed(0)}h</div><div className="text-xs text-slate-500">Total Hours</div></CardContent></Card>
+                  <Card className="shadow-sm"><CardContent className="p-3 text-center"><div className="text-xl font-bold text-teal-600">{connectionAvgHours.toFixed(0)}h</div><div className="text-xs text-slate-500">Avg Hours/Member</div></CardContent></Card>
                 </div>
 
                 {/* Employee Distribution Table */}
@@ -2885,7 +2877,7 @@ export default function ShiftSchedulerPage() {
                   <Card className="shadow-sm"><CardContent className="p-3 text-center"><div className="text-lg font-bold text-amber-600">{balance.min.toFixed(1)}h</div><div className="text-xs text-slate-500">Min Hours</div></CardContent></Card>
                 </div>
                 <div className="flex items-center gap-2 p-3 rounded-lg bg-slate-100 dark:bg-slate-800">
-                  <Badge className={`text-white border-0 ${balance.status === "green" ? "bg-green-500" : balance.status === "yellow" ? "bg-yellow-500" : "bg-red-500"}`}>Balance: {balance.status.toUpperCase()}</Badge>
+
                   <span className="text-xs text-slate-600 dark:text-slate-300">Variance: {balance.variance.toFixed(1)}h | Avg Deviation: {balance.avgAbsDeviation.toFixed(1)}h</span>
                 </div>
                 <table className="w-full text-sm">
@@ -2967,7 +2959,7 @@ export default function ShiftSchedulerPage() {
                     <tr key={u.id} className={`border-b border-slate-100 dark:border-slate-800 hover:bg-emerald-50/80 dark:hover:bg-emerald-950/20 transition-colors ${u.id % 2 === 0 ? "bg-slate-50/50 dark:bg-slate-900/30" : ""}`}>
                       <td className="px-3 py-2 font-medium text-sm">{u.username}{u.id === user?.id && <span className="ml-1 text-[10px] text-blue-500">(you)</span>}</td>
                       <td className="px-3 py-2 text-xs text-slate-500">{u.email || "-"}</td>
-                      <td className="px-3 py-2 text-center"><Badge className={`text-[10px] text-white border-0 ${u.role === "super_admin" ? "bg-purple-700" : u.role === "admin" ? "bg-red-500" : u.role === "editor" ? "bg-amber-500" : "bg-slate-500"}`}>{u.role}</Badge></td>
+                      <td className="px-3 py-2 text-center"><Badge className={`text-[10px] text-white border-0 ${u.role === "super_admin" ? "bg-purple-700" : u.role === "admin" ? "bg-red-500" : u.role === "editor" ? "bg-amber-500" : u.role === "connection" ? "bg-teal-500" : "bg-slate-500"}`}>{u.role}</Badge></td>
                       <td className="px-3 py-2 text-center"><span className="text-xs text-slate-600 dark:text-slate-300">{REGIONS[u.region] || u.region}</span></td>
                       <td className="px-3 py-2">
                         <div className="flex items-center justify-center gap-1">
@@ -2993,7 +2985,7 @@ export default function ShiftSchedulerPage() {
               <div><Label className="text-xs">Username</Label><Input value={newUsername} onChange={(e) => setNewUsername(e.target.value)} className="mt-1" /></div>
               <div><Label className="text-xs">Password</Label><Input type="password" value={newUserPassword} onChange={(e) => setNewUserPassword(e.target.value)} className="mt-1" /></div>
               <div><Label className="text-xs">Email (optional)</Label><Input type="email" value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} className="mt-1" /></div>
-              <div><Label className="text-xs">Role</Label><Select value={newUserRole} onValueChange={setNewUserRole}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="admin">Admin</SelectItem><SelectItem value="editor">Editor</SelectItem><SelectItem value="viewer">Viewer</SelectItem></SelectContent></Select></div>
+              <div><Label className="text-xs">Role</Label><Select value={newUserRole} onValueChange={setNewUserRole}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="admin">Admin</SelectItem><SelectItem value="editor">Editor</SelectItem><SelectItem value="viewer">Viewer</SelectItem><SelectItem value="connection">Connection Team</SelectItem></SelectContent></Select></div>
               <div><Label className="text-xs">Region</Label><Select value={newUserRegion} onValueChange={setNewUserRegion}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent>{Object.entries(REGIONS).map(([key, label]) => (<SelectItem key={key} value={key}>{label}</SelectItem>))}</SelectContent></Select></div>
             </div>
             <DialogFooter><Button variant="outline" onClick={() => setShowAddUser(false)}>Cancel</Button><Button onClick={addUser} className="bg-blue-600 hover:bg-blue-700 text-white">Create User</Button></DialogFooter>
@@ -3006,7 +2998,7 @@ export default function ShiftSchedulerPage() {
             <DialogHeader><DialogTitle>Edit User: {editingUser?.username}</DialogTitle></DialogHeader>
             <div className="space-y-3 mt-2">
               <div><Label className="text-xs">Email</Label><Input value={editUserEmail} onChange={(e) => setEditUserEmail(e.target.value)} className="mt-1" /></div>
-              <div><Label className="text-xs">Role</Label><Select value={editUserRole} onValueChange={setEditUserRole}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="admin">Admin</SelectItem><SelectItem value="editor">Editor</SelectItem><SelectItem value="viewer">Viewer</SelectItem></SelectContent></Select></div>
+              <div><Label className="text-xs">Role</Label><Select value={editUserRole} onValueChange={setEditUserRole}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="admin">Admin</SelectItem><SelectItem value="editor">Editor</SelectItem><SelectItem value="viewer">Viewer</SelectItem><SelectItem value="connection">Connection Team</SelectItem></SelectContent></Select></div>
               <div><Label className="text-xs">Region</Label><Select value={editUserRegion} onValueChange={setEditUserRegion}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent>{Object.entries(REGIONS).map(([key, label]) => (<SelectItem key={key} value={key}>{label}</SelectItem>))}</SelectContent></Select></div>
             </div>
             <DialogFooter><Button variant="outline" onClick={() => setEditingUser(null)}>Cancel</Button><Button onClick={saveUserEdit} className="bg-blue-600 hover:bg-blue-700 text-white">Save Changes</Button></DialogFooter>
@@ -3235,7 +3227,7 @@ export default function ShiftSchedulerPage() {
         <footer className="mt-auto">
           <div className="h-px bg-gradient-to-r from-transparent via-slate-300 dark:via-slate-700 to-transparent" />
           <div className="max-w-7xl mx-auto px-4 py-4 text-center">
-            <p className="text-xs text-slate-400 dark:text-slate-500">IT Helpdesk Shift Scheduler &copy; {new Date().getFullYear()} &mdash; Powered by Next.js</p>
+            <p className="text-xs text-slate-400 dark:text-slate-500">IT Helpdesk Shift Scheduler &copy; {new Date().getFullYear()}</p>
           </div>
         </footer>
       </div>

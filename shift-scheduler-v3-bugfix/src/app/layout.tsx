@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
-import { ThemeProvider } from "next-themes";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -16,10 +15,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "IT Helpdesk Shift Scheduler",
-  description: "Balanced shift scheduling for IT Helpdesk teams with fairness tracking, Excel export, and real-time management.",
-  icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
-  },
+  description: "Staff shift scheduling and management system for IT helpdesk teams.",
+  keywords: ["shift scheduler", "helpdesk", "IT management", "scheduling"],
 };
 
 export default function RootLayout({
@@ -32,9 +29,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
-        <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
-          {children}
-        </ThemeProvider>
+        {children}
         <Toaster />
       </body>
     </html>
