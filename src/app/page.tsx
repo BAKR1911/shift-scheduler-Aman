@@ -1976,17 +1976,6 @@ export default function ShiftSchedulerPage() {
             <Card className="bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/40 dark:to-orange-950/40 border-amber-200 dark:border-amber-800 shadow-sm hover:shadow-md transition-shadow"><CardContent className="p-4 text-center"><div className="text-2xl font-bold text-amber-700 dark:text-amber-300">{totalHolidays}</div><div className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">Holidays</div></CardContent></Card>
             <Card className="bg-gradient-to-br from-rose-50 to-pink-50 dark:from-rose-950/40 dark:to-pink-950/40 border-rose-200 dark:border-rose-800 shadow-sm hover:shadow-md transition-shadow"><CardContent className="p-4 text-center"><div className="text-2xl font-bold text-rose-700 dark:text-rose-300">{totalHours.toFixed(1)}h</div><div className="text-xs text-rose-600 dark:text-rose-400 mt-0.5">Total Hours</div></CardContent></Card>
           </div>
-          {/* Holiday Deduction Display */}
-          {holidayDeductionHours > 0 && (
-            <div className="mt-3 max-w-7xl mx-auto">
-              <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                <span className="text-sm text-amber-800 dark:text-amber-200">
-                  Holiday Deduction: <span className="font-bold">-{holidayDeductionHours.toFixed(1)}h</span>
-                </span>
-              </div>
-            </div>
-          )}
         </div>
         )}
 

@@ -106,9 +106,7 @@ function shiftForType(dayType: string, settings: Settings, isHoliday: boolean): 
 
 export function getHoursForDate(dateStr: string, settings: Settings, isHoliday: boolean): number {
   if (isHoliday) {
-    if (settings.holidayHours && settings.holidayHours[dateStr] !== undefined) {
-      return settings.holidayHours[dateStr];
-    }
+    // Holidays always = 0 hours (days off)
     return 0;
   }
   if (settings.dayHours && settings.dayHours[dateStr] !== undefined) {
@@ -635,12 +633,7 @@ export function recalcScheduleHours(
     if (entry.isManual) return entry;
     const isHolidayDynamic = holidaySet.has(entry.date);
     if (isHolidayDynamic) {
-      // Check holidayHours first - user may have set specific hours for this holiday
-      const hrs = getHoursForDate(entry.date, settings, true);
-      if (hrs > 0) {
-        const shift = shiftForType(entry.dayType, settings, true);
-        return { ...entry, start: shift.start, end: shift.end, hours: hrs, isHoliday: true };
-      }
+      // Holidays always = 0 hours (days off)
       return { ...entry, start: "00:00 AM", end: "00:00 AM", hours: 0, isHoliday: true };
     }
     const shift = shiftForType(entry.dayType, settings, false);

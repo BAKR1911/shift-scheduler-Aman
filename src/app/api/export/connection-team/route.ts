@@ -25,6 +25,8 @@ export async function POST(request: NextRequest) {
       holidays: JSON.parse(dbSettings.holidays || "[]"),
       holidayHours: JSON.parse(dbSettings.holidayHours || "{}"),
       dayHours: JSON.parse(dbSettings.dayHours || "{}"),
+      summerTime: !!dbSettings.summerTime,
+      summerShifts: JSON.parse(dbSettings.summerShifts || "{}"),
     } : {
       shifts: {
         workingDay: { hours: 6, start: "09:00", end: "15:00" },
@@ -35,6 +37,8 @@ export async function POST(request: NextRequest) {
       holidays: [],
       holidayHours: {},
       dayHours: {},
+      summerTime: false,
+      summerShifts: {},
     };
 
     // Fetch connection team entries

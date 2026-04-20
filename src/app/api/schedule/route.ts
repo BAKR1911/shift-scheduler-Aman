@@ -66,10 +66,8 @@ export async function GET(request: NextRequest) {
       else if (jsDay === 5) dayType = "Friday";
       else if (jsDay === 4) dayType = "Thursday";
 
-      // For holidays, check holidayHours first
-      const hours = isHolidayDynamic
-        ? (getHoursForDate(e.date, settings, true) || 0)
-        : e.hours;
+      // For holidays, always use 0 hours (days off)
+      const hours = isHolidayDynamic ? 0 : e.hours;
 
       return {
         date: e.date,

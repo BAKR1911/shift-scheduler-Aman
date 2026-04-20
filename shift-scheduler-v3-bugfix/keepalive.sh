@@ -1,12 +1,8 @@
 #!/bin/bash
-cd /home/z/my-project
 while true; do
-  NODE_OPTIONS="--max-old-space-size=2048" ./node_modules/.bin/next dev -p 3000 2>&1 &
-  PID=$!
-  echo "Started next dev with PID $PID"
-  # Wait for process to die
-  wait $PID 2>/dev/null
-  echo "Process died, restarting in 3s..."
+  cd /home/z/my-project
+  NODE_OPTIONS="--max-old-space-size=4096" bun run dev 2>&1 | tee -a /home/z/my-project/dev.log
+  echo "=== Server died, restarting in 3s ===" >> /home/z/my-project/dev.log
   sleep 3
-  rm -rf .next
+  rm -rf /home/z/my-project/.next
 done

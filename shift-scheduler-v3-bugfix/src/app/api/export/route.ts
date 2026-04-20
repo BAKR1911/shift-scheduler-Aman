@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
       weekStart: dbSettings?.weekStart || "Friday",
       holidays: dbSettings ? JSON.parse(dbSettings.holidays) : [],
       summerTime: !!dbSettings?.summerTime,
-      summerShifts: dbSettings ? JSON.parse(dbSettings.summerShifts) : {},
+      summerShifts: dbSettings ? JSON.parse(dbSettings.summerShifts || "{}") : {},
       dayHours: dbSettings ? JSON.parse(dbSettings.dayHours || "{}") : {},
       holidayHours: dbSettings ? JSON.parse(dbSettings.holidayHours || "{}") : {},
     };
