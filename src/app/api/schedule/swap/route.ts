@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkAuth, unauthorizedResponse, forbiddenResponse } from "@/lib/auth";
+import { checkAuth, unauthorizedResponse, forbiddenResponse, isAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 
 // POST: Swap two employees' shifts for a given month
 export async function POST(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
-  if (auth.role !== "admin" && auth.role !== "editor") return forbiddenResponse();
+  if (!isAdmin(auth.role) && auth.role !== "editor") return forbiddenResponse();
 
   try {
     const body = await request.json();

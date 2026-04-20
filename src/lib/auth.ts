@@ -71,6 +71,13 @@ export function forbiddenResponse(): NextResponse {
 }
 
 /**
+ * Check if a role has admin-level access (admin or super_admin).
+ */
+export function isAdmin(role: string): boolean {
+  return role === "admin" || role === "super_admin";
+}
+
+/**
  * Authenticate user with username and password (in-memory store + bcrypt).
  */
 export async function authenticateUser(username: string, password: string): Promise<

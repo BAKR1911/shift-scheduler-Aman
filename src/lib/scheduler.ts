@@ -1,18 +1,17 @@
 /**
- * IT Helpdesk Shift Scheduler Algorithm v3
- * Ported from Python — improved balanced scheduling with long-term fairness tracking.
+ * IT Helpdesk Shift Scheduler Algorithm v4.1 — Target-Based Balancing (Improved)
  *
- * Key features:
- * 1. Week starts on Friday (Egyptian work week: Fri→Thu)
- * 2. One employee OFF per week (all 7 days, Fri-Thu)
- * 3. Consecutive OFF week prevention — same person never gets 2 weeks OFF in a row
- * 4. Holiday shift support — specific dates use "Holiday" shift config
- * 5. Summer time support — toggle between normal and summer shift times
- * 6. Per-day custom hours — override hours for specific dates
- * 7. Multi-factor scoring for OFF selection and daily assignments
- * 8. Post-generation swap optimization to reduce hour variance
- * 9. Cumulative stats carry forward across months for long-term balance
+ * Key improvements:
+ * 1. OFF weeks distributed with MAXIMUM fairness: spread as evenly as possible
+ * 2. Target-Based daily: idealTotal = (cumHours + monthHours) / n, pick highest deficit
+ * 3. Deterministic: No Math.random() — reproducible results
+ * 4. Friday/Saturday fairness: Weekend penalty in scoring
+ * 5. No consecutive days: Hard constraint with soft fallback
+ * 6. Post-optimization swaps to minimize variance
+ * 7. Cross-month cumulative stats carry forward
  */
+
+// ===== Type Definitions =====
 
 export interface Employee {
   id: number;
@@ -31,16 +30,16 @@ export interface Settings {
   shifts: Record<string, ShiftConfig>;
   weekStart: string;
   holidays: string[];
-  holidayHours?: Record<string, number>; // Custom hours deduction for each holiday date
+  holidayHours?: Record<string, number>;
   summerTime?: boolean;
   summerShifts?: Record<string, ShiftConfig>;
   dayHours?: Record<string, number>;
 }
 
 export interface ScheduleEntry {
-  date: string;       // YYYY-MM-DD
-  dayName: string;    // Friday, Saturday, Sunday, etc.
-  dayType: string;    // Weekday, Thursday, Friday, Saturday
+  date: string;
+  dayName: string;
+  dayType: string;
   empIdx: number;
   empName: string;
   empHrid: string;
@@ -74,87 +73,49 @@ export interface CumulativeStats {
   offWeeks: number;
 }
 
-// JS getDay(): 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+// ===== Utility Functions =====
+
 const DAYS_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+const DAY_NAME_TO_JS_DAY: Record<string, number> = {
+  Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3,
+  Thursday: 4, Friday: 5, Saturday: 6,
+};
 
 function getDayType(d: Date): string {
   const jsDay = d.getDay();
-  if (jsDay === 6) return "Saturday"; // Saturday
-  if (jsDay === 5) return "Friday";    // Friday
-  if (jsDay === 4) return "Thursday";  // Thursday
-  return "Weekday";                     // Sun, Mon, Tue, Wed
+  if (jsDay === 6) return "Saturday";
+  if (jsDay === 5) return "Friday";
+  if (jsDay === 4) return "Thursday";
+  return "Weekday";
+}
+
+function isWeekendDay(dayType: string): boolean {
+  return dayType === "Saturday" || dayType === "Friday";
 }
 
 function shiftForType(dayType: string, settings: Settings, isHoliday: boolean): ShiftConfig {
-  // Holiday dates use the "Holiday" shift config if available
   if (isHoliday && settings.shifts["Holiday"]) {
     return settings.shifts["Holiday"];
   }
-
-  // Summer time override
   if (settings.summerTime && settings.summerShifts && settings.summerShifts[dayType]) {
     return settings.summerShifts[dayType];
   }
-
   return settings.shifts[dayType] || settings.shifts["Weekday"];
 }
 
-/**
- * Get hours for a specific date. Checks holidayHours first (for holidays), then dayHours, then falls back to shift config.
- */
 export function getHoursForDate(dateStr: string, settings: Settings, isHoliday: boolean): number {
-  // For holidays, use custom holiday deduction hours if set, otherwise return 0 (no work on holidays)
   if (isHoliday) {
     if (settings.holidayHours && settings.holidayHours[dateStr] !== undefined) {
       return settings.holidayHours[dateStr];
     }
-    // Default to 0 for holidays (not working days) - user can specify deduction hours in holidayHours
     return 0;
   }
-  // Check for custom day hours
   if (settings.dayHours && settings.dayHours[dateStr] !== undefined) {
     return settings.dayHours[dateStr];
   }
   const shift = shiftForType(getDayType(new Date(dateStr + "T00:00:00")), settings, false);
   return shift.hours;
-}
-
-// Map day names to JS getDay() values (0=Sun, 1=Mon, ..., 5=Fri, 6=Sat)
-const DAY_NAME_TO_JS_DAY: Record<string, number> = {
-  "Sunday": 0,
-  "Monday": 1,
-  "Tuesday": 2,
-  "Wednesday": 3,
-  "Thursday": 4,
-  "Friday": 5,
-  "Saturday": 6,
-};
-
-function getWeeksInMonth(year: number, month: number, weekStart: string = "Friday"): Date[][] {
-  const weeks: Date[][] = [];
-  const firstDay = new Date(year, month - 1, 1);
-  const lastDay = new Date(year, month, 0);
-
-  // Find the first week start day on or before the first day
-  const targetDay = DAY_NAME_TO_JS_DAY[weekStart] ?? 5; // Default to Friday if not found
-  let d = new Date(firstDay);
-  while (d.getDay() !== targetDay) {
-    d.setDate(d.getDate() - 1);
-  }
-
-  while (d <= lastDay) {
-    const week: Date[] = [];
-    for (let i = 0; i < 7; i++) {
-      week.push(new Date(d));
-      d = new Date(d);
-      d.setDate(d.getDate() + 1);
-    }
-    // Include week if any day is in the target month
-    if (week.some((day) => day.getMonth() === month - 1 && day.getFullYear() === year)) {
-      weeks.push(week);
-    }
-  }
-  return weeks;
 }
 
 export function formatDate(d: Date): string {
@@ -164,49 +125,163 @@ export function formatDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+function getWeeksInMonth(year: number, month: number, weekStart: string = "Friday"): Date[][] {
+  const weeks: Date[][] = [];
+  const firstDay = new Date(year, month - 1, 1);
+  const lastDay = new Date(year, month, 0);
+  const targetDay = DAY_NAME_TO_JS_DAY[weekStart] ?? 5;
+  let d = new Date(firstDay);
+  while (d.getDay() !== targetDay) d.setDate(d.getDate() - 1);
+
+  while (d <= lastDay) {
+    const week: Date[] = [];
+    for (let i = 0; i < 7; i++) {
+      week.push(new Date(d));
+      d = new Date(d);
+      d.setDate(d.getDate() + 1);
+    }
+    if (week.some((day) => day.getMonth() === month - 1 && day.getFullYear() === year)) {
+      weeks.push(week);
+    }
+  }
+  return weeks;
+}
+
 function initializeCumStats(n: number, existing?: Record<number, CumulativeStats>): Record<number, CumulativeStats> {
   const stats: Record<number, CumulativeStats> = {};
   for (let i = 0; i < n; i++) {
     if (existing && existing[i]) {
       stats[i] = { ...existing[i] };
     } else {
-      stats[i] = {
-        totalHours: 0,
-        totalDays: 0,
-        weekendDays: 0,
-        saturdays: 0,
-        fridays: 0,
-        offWeeks: 0,
-      };
+      stats[i] = { totalHours: 0, totalDays: 0, weekendDays: 0, saturdays: 0, fridays: 0, offWeeks: 0 };
     }
   }
   return stats;
 }
 
-/**
- * Get the last OFF person index from existing entries (before the current month).
- * Used to prevent the same person from getting OFF in consecutive weeks.
- */
 function getLastOffPerson(entries: ScheduleEntry[], currentMonthPrefix: string): number {
-  // Find entries from before the current month, get the latest week's OFF person
   const prevEntries = entries.filter((e) => !e.date.startsWith(currentMonthPrefix));
   if (prevEntries.length === 0) return -1;
 
-  // Group by week key
   const weekOffMap: Record<string, number> = {};
   for (const e of prevEntries) {
     const wk = `${e.date.substring(0, 7)}-W${e.weekNum}`;
-    if (!weekOffMap[wk]) {
-      weekOffMap[wk] = e.offPersonIdx;
-    }
+    if (!weekOffMap[wk]) weekOffMap[wk] = e.offPersonIdx;
   }
 
-  // Get the last week's OFF person
   const weekKeys = Object.keys(weekOffMap).sort();
   if (weekKeys.length === 0) return -1;
   return weekOffMap[weekKeys.length - 1];
 }
 
+function getLastWorkedEmployeeName(entries: ScheduleEntry[], firstDateOfThisMonth: string): string | null {
+  const prevEntries = entries.filter((e) => e.date < firstDateOfThisMonth && !e.isHoliday && e.hours > 0);
+  if (prevEntries.length === 0) return null;
+  return prevEntries[prevEntries.length - 1].empName;
+}
+
+// ===== Core Algorithm =====
+
+/**
+ * Distribute OFF weeks as evenly as possible among employees.
+ * 
+ * Strategy:
+ * 1. Calculate ideal OFF weeks per person = totalWeeks / n
+ * 2. Each person gets either floor or ceil of ideal
+ * 3. Spread them out: no consecutive OFF weeks for same person
+ * 4. Consider cumulative OFF weeks from previous months
+ * 
+ * Returns weekOffMap: weekNum → employeeIndex
+ */
+function distributeOffWeeks(
+  totalWeeks: number,
+  n: number,
+  cumStats: Record<number, CumulativeStats>,
+  lastOffIdx: number
+): Record<number, number> {
+  const weekOffMap: Record<number, number> = {};
+
+  // Calculate how many OFF weeks each person should get this month
+  // idealOffPerPerson = totalWeeks / n
+  // Some get floor, some get ceil
+  const idealOff = totalWeeks / n;
+  const baseOff = Math.floor(idealOff);
+  const extraOffCount = Math.round((idealOff - baseOff) * n); // how many get +1
+
+  // Determine target offWeeks per employee this month (including cumulative consideration)
+  // Employees with fewer cumulative offWeeks should get more this month
+  const empTargets: Array<{ idx: number; cumOff: number; targetOff: number }> = [];
+  for (let i = 0; i < n; i++) {
+    empTargets.push({
+      idx: i,
+      cumOff: cumStats[i]?.offWeeks || 0,
+      targetOff: 0,
+    });
+  }
+
+  // Sort by cumulative offWeeks (ascending) — those with fewer get priority
+  empTargets.sort((a, b) => a.cumOff - b.cumOff);
+
+  // Assign target offWeeks: extraOffCount people get baseOff+1, rest get baseOff
+  for (let i = 0; i < n; i++) {
+    empTargets[i].targetOff = i < extraOffCount ? baseOff + 1 : baseOff;
+  }
+
+  // Build a map: idx → target offWeeks
+  const targetMap: Record<number, number> = {};
+  for (const e of empTargets) {
+    targetMap[e.idx] = e.targetOff;
+  }
+
+  // Greedily assign OFF weeks
+  const currentOffCount: Record<number, number> = {};
+  for (let i = 0; i < n; i++) currentOffCount[i] = 0;
+
+  let prevOff = lastOffIdx;
+
+  for (let w = 0; w < totalWeeks; w++) {
+    // Find candidates: not the previous week's OFF, hasn't reached their target
+    let candidates = Array.from({ length: n }, (_, i) => i)
+      .filter((i) => i !== prevOff && currentOffCount[i] < targetMap[i]);
+
+    // If no one needs more OFF weeks but we still have weeks to fill
+    if (candidates.length === 0) {
+      candidates = Array.from({ length: n }, (_, i) => i)
+        .filter((i) => i !== prevOff);
+    }
+
+    // Among candidates, pick the one with most hours (needs rest most)
+    // Tie-break: least current offWeeks this month
+    candidates.sort((a, b) => {
+      const aHours = (cumStats[a]?.totalHours || 0);
+      const bHours = (cumStats[b]?.totalHours || 0);
+      if (aHours !== bHours) return bHours - aHours;
+      return currentOffCount[a] - currentOffCount[b];
+    });
+
+    const chosen = candidates[0];
+    weekOffMap[w] = chosen;
+    currentOffCount[chosen]++;
+    prevOff = chosen;
+  }
+
+  return weekOffMap;
+}
+
+/**
+ * Generate schedule for a month using Target-Based Balancing v4.1.
+ *
+ * Key rule: OFF weeks only apply when n > 7 (employees > days in a week).
+ * When n <= 7: no off person, all employees are available every day.
+ * When n > 7: one person off per week, rotating fairly.
+ *
+ * Algorithm:
+ * 1. Determine if OFF weeks apply (n > 7)
+ * 2. If yes: distribute OFF weeks evenly (no consecutive for same person)
+ * 3. Calculate idealTotal = (cumHours + monthWorkingHours) / n
+ * 4. Each day: pick worker with highest deficit, no consecutive days, weekend fairness
+ * 5. Post-optimize with swaps to minimize variance
+ */
 export function generateScheduleForMonth(
   year: number,
   month: number,
@@ -223,197 +298,168 @@ export function generateScheduleForMonth(
   }
 
   const cumStats = initializeCumStats(n, existingCumStats);
-
   const weeks = getWeeksInMonth(year, month, settings.weekStart);
   if (weeks.length === 0) {
     return { entries: [], localStats: {}, cumulativeStats: cumStats, weekOffMap: {} };
   }
 
-  // Initialize local stats for this month
+  const holidaySet = new Set(settings.holidays || []);
+  const monthPrefix = `${year}-${String(month).padStart(2, "0")}`;
+
+  // Initialize local stats
   const localStats: Record<number, LocalStats> = {};
   for (let i = 0; i < n; i++) {
-    localStats[i] = {
-      days: 0,
-      hours: 0,
-      weekend: 0,
-      sat: 0,
-      fri: 0,
-      offWeeks: 0,
-      lastDayIdx: -999,
-    };
+    localStats[i] = { days: 0, hours: 0, weekend: 0, sat: 0, fri: 0, offWeeks: 0, lastDayIdx: -999 };
   }
 
-  // Build holiday set
-  const holidaySet = new Set(settings.holidays || []);
-
-  const entries: ScheduleEntry[] = [];
-  let globalDayCounter = 0;
-
-  // Determine last OFF person from existing entries to prevent consecutive
-  const monthPrefix = `${year}-${String(month).padStart(2, "0")}`;
-  const lastOffPerson = getLastOffPerson(existingEntries || [], monthPrefix);
-
-  // === STEP 1: Determine OFF person for each week ===
-  const weekOffMap: Record<number, number> = {};
-  const offCountThisMonth: Record<number, number> = {};
-  const recentlyOff = new Set<number>();
-
-  // Track who was off in the last week from previous month
-
-  for (let wn = 0; wn < weeks.length; wn++) {
-    // Reset recentlyOff — only keep the previous week's off person
-    recentlyOff.clear();
-    if (wn > 0) {
-      recentlyOff.add(weekOffMap[wn - 1]);
-    } else if (lastOffPerson >= 0 && lastOffPerson < n) {
-      recentlyOff.add(lastOffPerson);
+  // === CALCULATE TOTAL MONTH HOURS ===
+  let totalMonthHours = 0;
+  for (const week of weeks) {
+    for (const day of week) {
+      if (day.getMonth() !== month - 1 || day.getFullYear() !== year) continue;
+      const dateStr = formatDate(day);
+      if (holidaySet.has(dateStr)) continue;
+      totalMonthHours += getHoursForDate(dateStr, settings, false);
     }
-
-    // Score: lower = more deserving of OFF
-    const scores = activeEmployees.map((_, ei) => {
-      const cs = cumStats[ei];
-      const ls = localStats[ei];
-      let sc = 0;
-
-      // Cumulative OFF weeks — fewer OFF weeks means higher priority for OFF
-      sc += (cs?.offWeeks || 0) * 100;
-      sc += (ls?.offWeeks || 0) * 50;
-
-      // More hours worked = more deserving of OFF
-      sc -= (cs?.totalHours || 0) * 2;
-      sc -= (ls?.hours || 0) * 3;
-
-      // HEAVY DAYS BONUS: Extra weight for Friday/Saturday hours
-      // Employees who worked more Friday/Saturday hours should be prioritized for OFF
-      const cumHeavyHours = (cs?.fridays || 0) * 9 + (cs?.saturdays || 0) * 9; // Assuming 9 hours per heavy day
-      const localHeavyHours = (ls?.fri || 0) * 9 + (ls?.sat || 0) * 9;
-      sc -= cumHeavyHours * 1.5; // Extra weight for heavy days
-      sc -= localHeavyHours * 2; // Stronger weight for current month heavy days
-
-      // STRONG penalty for recently off (prevents consecutive weeks)
-      if (recentlyOff.has(ei)) {
-        sc += 10000; // Very strong penalty
-      }
-
-      // If this person already got OFF this month, penalize
-      if ((offCountThisMonth[ei] || 0) > 0) {
-        sc += 5000;
-      }
-
-      // Small random tiebreaker
-      sc += Math.random() * 5;
-      return { ei, score: sc };
-    });
-
-    scores.sort((a, b) => a.score - b.score);
-    const offPerson = scores[0].ei;
-    weekOffMap[wn] = offPerson;
-    offCountThisMonth[offPerson] = (offCountThisMonth[offPerson] || 0) + 1;
-    localStats[offPerson].offWeeks += 1;
   }
 
-  // === STEP 2: Assign employees to each day ===
-  for (let wn = 0; wn < weeks.length; wn++) {
-    const weekDays = weeks[wn];
-    const offPerson = weekOffMap[wn];
-    const workers = Array.from({ length: n }, (_, i) => i).filter((i) => i !== offPerson);
+  // === STEP 1: DETERMINE OFF WEEKS ===
+  // OFF weeks only when employees > 7 (more people than days in a week)
+  const hasOffWeeks = n > 7;
+  const weekOffMap: Record<number, number> = {};
 
-    for (const day of weekDays) {
+  if (hasOffWeeks) {
+    const lastOffPerson = getLastOffPerson(existingEntries || [], monthPrefix);
+    let lastOffIdx = -1;
+    if (lastOffPerson >= 0 && lastOffPerson < n) {
+      lastOffIdx = lastOffPerson;
+    } else if (lastOffPerson >= 0 && existingEntries && existingEntries.length > 0) {
+      const prevOffName = existingEntries[existingEntries.length - 1]?.offPerson;
+      if (prevOffName) {
+        const idx = activeEmployees.findIndex((e) => e.name === prevOffName);
+        if (idx >= 0) lastOffIdx = idx;
+      }
+    }
+    const offMap = distributeOffWeeks(weeks.length, n, cumStats, lastOffIdx);
+    for (const [k, v] of Object.entries(offMap)) weekOffMap[Number(k)] = v;
+    for (let w = 0; w < weeks.length; w++) {
+      localStats[weekOffMap[w]].offWeeks++;
+    }
+  }
+
+  // === STEP 2: CALCULATE TARGET ===
+  const totalCumHours = Object.values(cumStats).reduce((sum, c) => sum + c.totalHours, 0);
+  const idealTotalPerEmployee = (totalCumHours + totalMonthHours) / n;
+
+  // === STEP 3: ASSIGN DAILY WORKERS ===
+  const entries: ScheduleEntry[] = [];
+
+  // Find last worked person from previous month (for consecutive prevention)
+  const firstDateOfThisMonth = formatDate(weeks[0][0]);
+  const lastWorkedName = getLastWorkedEmployeeName(existingEntries || [], firstDateOfThisMonth);
+  let lastWorker = -1;
+  if (lastWorkedName) {
+    const idx = activeEmployees.findIndex((e) => e.name === lastWorkedName);
+    if (idx >= 0) lastWorker = idx;
+  }
+
+  for (let wn = 0; wn < weeks.length; wn++) {
+    // Determine who's available this day
+    const offIdx = hasOffWeeks ? weekOffMap[wn] : -1;
+    const workers = Array.from({ length: n }, (_, i) => i).filter((i) => i !== offIdx);
+
+    for (const day of weeks[wn]) {
       if (day.getMonth() !== month - 1 || day.getFullYear() !== year) continue;
 
-      const dt = getDayType(day);
       const dateStr = formatDate(day);
       const isHoliday = holidaySet.has(dateStr);
-      const shift = shiftForType(dt, settings, isHoliday);
+      const dayType = getDayType(day);
+      const shift = shiftForType(dayType, settings, isHoliday);
       const hrs = getHoursForDate(dateStr, settings, isHoliday);
 
-      // Build eligible list with rest constraint
-      // RULE: No employee should work two consecutive days (except in extreme necessity)
-      // First try employees with at least 1 day gap (gap >= 2)
-      let eligible = workers.filter((ei) => {
-        const gap = globalDayCounter - localStats[ei].lastDayIdx;
-        return gap >= 2;
-      });
-      // If no eligible employees (extreme necessity), allow those with gap >= 1
-      if (eligible.length === 0) {
-        eligible = workers.filter((ei) => {
-          const gap = globalDayCounter - localStats[ei].lastDayIdx;
-          return gap >= 1;
+      // Holidays with 0 hours
+      if (isHoliday || hrs === 0) {
+        let eligible = workers.filter((i) => i !== lastWorker);
+        if (eligible.length === 0) eligible = workers;
+
+        const scored = eligible.map((i) => ({
+          idx: i,
+          days: (cumStats[i]?.totalDays || 0) + (localStats[i]?.days || 0),
+        }));
+        scored.sort((a, b) => a.days - b.days);
+        const chosen = scored[0].idx;
+
+        // When no off person (n <= 7): offPerson = empty string
+        const offEmpName = offIdx >= 0 ? activeEmployees[offIdx].name : "";
+        const offEmpIdx = offIdx >= 0 ? offIdx : 0;
+        const offEmpHrid = offIdx >= 0 ? activeEmployees[offIdx].hrid : "";
+        entries.push({
+          date: dateStr, dayName: DAYS_NAMES[day.getDay()], dayType,
+          empIdx: chosen, empName: activeEmployees[chosen].name, empHrid: activeEmployees[chosen].hrid,
+          start: shift.start, end: shift.end, hours: hrs,
+          offPerson: offEmpName, offPersonIdx: offEmpIdx,
+          offPersonHrid: offEmpHrid,
+          weekNum: wn, isHoliday, isManual: false,
         });
+        continue;
       }
-      // If still no eligible employees, use all workers (fallback)
+
+      // === Normal working day ===
+      // CONSTRAINT: No consecutive days
+      let eligible = workers.filter((i) => i !== lastWorker);
       if (eligible.length === 0) eligible = [...workers];
 
-      // Multi-factor scoring (lower = better candidate)
-      const scored = eligible.map((ei) => {
-        const cs = cumStats[ei];
-        const ls = localStats[ei];
-        let sc = 0;
-        // Cumulative factors
-        sc += (cs?.totalHours || 0) * 8;
-        sc += (cs?.totalDays || 0) * 4;
-        // Weekend fairness
-        if (dt === "Saturday") {
-          sc += (cs?.saturdays || 0) * 25;
-          sc += (cs?.weekendDays || 0) * 8;
-          sc += (ls?.sat || 0) * 15;
-        } else if (dt === "Friday") {
-          sc += (cs?.fridays || 0) * 25;
-          sc += (cs?.weekendDays || 0) * 8;
-          sc += (ls?.fri || 0) * 15;
-        } else if (dt === "Thursday") {
-          sc += (cs?.weekendDays || 0) * 3;
+      // SCORE: deficit from ideal total (higher = more deserving of work)
+      const scored = eligible.map((i) => {
+        const combinedHours = (cumStats[i]?.totalHours || 0) + (localStats[i]?.hours || 0);
+        let deficit = idealTotalPerEmployee - combinedHours;
+
+        // WEEKEND FAIRNESS: penalize workers with many weekend days
+        if (isWeekendDay(dayType)) {
+          const combinedWeekends = (cumStats[i]?.weekendDays || 0) + (localStats[i]?.weekend || 0);
+          deficit -= combinedWeekends * (hrs * 0.5);
+
+          if (dayType === "Saturday") {
+            deficit -= ((cumStats[i]?.saturdays || 0) + (localStats[i]?.sat || 0)) * (hrs * 0.3);
+          } else if (dayType === "Friday") {
+            deficit -= ((cumStats[i]?.fridays || 0) + (localStats[i]?.fri || 0)) * (hrs * 0.3);
+          }
         }
-        // Local month balance
-        sc += (ls?.hours || 0) * 6;
-        sc += (ls?.days || 0) * 3;
-        // OFF weeks fairness
-        sc -= (cs?.offWeeks || 0) * 2;
-        // Random tiebreaker
-        sc += Math.random() * 3;
-        return { ei, score: sc };
+
+        // DAYS BALANCE: slight penalty for more total days
+        deficit -= ((cumStats[i]?.totalDays || 0) + (localStats[i]?.days || 0)) * 0.3;
+
+        return { idx: i, score: deficit };
       });
 
-      scored.sort((a, b) => a.score - b.score);
-      const chosen = scored[0].ei;
+      scored.sort((a, b) => b.score - a.score);
+      const chosen = scored[0].idx;
 
       // Update local stats
       localStats[chosen].days += 1;
       localStats[chosen].hours += hrs;
-      localStats[chosen].lastDayIdx = globalDayCounter;
-      if (dt === "Saturday" || dt === "Friday") {
-        localStats[chosen].weekend += 1;
-      }
-      if (dt === "Saturday") localStats[chosen].sat += 1;
-      if (dt === "Friday") localStats[chosen].fri += 1;
+      if (isWeekendDay(dayType)) localStats[chosen].weekend += 1;
+      if (dayType === "Saturday") localStats[chosen].sat += 1;
+      if (dayType === "Friday") localStats[chosen].fri += 1;
+      lastWorker = chosen;
 
-      const offEmp = activeEmployees[offPerson];
-
+      const offEmpName = offIdx >= 0 ? activeEmployees[offIdx].name : "";
+      const offEmpIdx = offIdx >= 0 ? offIdx : 0;
+      const offEmpHrid = offIdx >= 0 ? activeEmployees[offIdx].hrid : "";
       entries.push({
-        date: dateStr,
-        dayName: DAYS_NAMES[day.getDay()],
-        dayType: dt,
-        empIdx: chosen,
-        empName: activeEmployees[chosen].name,
-        empHrid: activeEmployees[chosen].hrid,
-        start: shift.start,
-        end: shift.end,
-        hours: hrs,
-        offPerson: offEmp.name,
-        offPersonIdx: offPerson,
-        offPersonHrid: offEmp.hrid,
-        weekNum: wn,
-        isHoliday,
-        isManual: false,
+        date: dateStr, dayName: DAYS_NAMES[day.getDay()], dayType,
+        empIdx: chosen, empName: activeEmployees[chosen].name, empHrid: activeEmployees[chosen].hrid,
+        start: shift.start, end: shift.end, hours: hrs,
+        offPerson: offEmpName, offPersonIdx: offEmpIdx,
+        offPersonHrid: offEmpHrid,
+        weekNum: wn, isHoliday, isManual: false,
       });
-
-      globalDayCounter += 1;
     }
   }
 
-  // === STEP 3: Post-generation swap optimization ===
+  // === STEP 4: POST-OPTIMIZATION SWAPS ===
   let optimized = true;
-  const maxIterations = 15;
+  const maxIterations = 30;
   let iteration = 0;
 
   while (optimized && iteration < maxIterations) {
@@ -422,17 +468,15 @@ export function generateScheduleForMonth(
 
     for (let i = 0; i < n && !optimized; i++) {
       for (let j = i + 1; j < n && !optimized; j++) {
-        const iDays = entries.filter((r) => r.empIdx === i && !r.isManual);
-        const jDays = entries.filter((r) => r.empIdx === j && !r.isManual);
+        const iEntries = entries.filter((r) => r.empIdx === i && !r.isManual && r.hours > 0);
+        const jEntries = entries.filter((r) => r.empIdx === j && !r.isManual && r.hours > 0);
 
-        for (const di of iDays) {
-          for (const dj of jDays) {
-            // Skip if same week
+        for (const di of iEntries) {
+          for (const dj of jEntries) {
             if (di.weekNum === dj.weekNum) continue;
-            // Skip if either is the OFF person for that week
             if (weekOffMap[di.weekNum] === i || weekOffMap[dj.weekNum] === j) continue;
-            // Skip if swap would make someone the OFF person's worker
             if (weekOffMap[di.weekNum] === j || weekOffMap[dj.weekNum] === i) continue;
+            if (wouldBeConsecutive(entries, di, dj, i, j)) continue;
 
             const hrsI = di.hours;
             const hrsJ = dj.hours;
@@ -440,13 +484,12 @@ export function generateScheduleForMonth(
             const newIHrs = localStats[i].hours - hrsI + hrsJ;
             const newJHrs = localStats[j].hours - hrsJ + hrsI;
 
-            // Weekend balance check
             let newIWeekend = localStats[i].weekend;
             let newJWeekend = localStats[j].weekend;
-            if (di.dayType === "Saturday" || di.dayType === "Friday") newIWeekend -= 1;
-            if (dj.dayType === "Saturday" || dj.dayType === "Friday") newIWeekend += 1;
-            if (dj.dayType === "Saturday" || dj.dayType === "Friday") newJWeekend -= 1;
-            if (di.dayType === "Saturday" || di.dayType === "Friday") newJWeekend += 1;
+            if (isWeekendDay(di.dayType)) newIWeekend -= 1;
+            if (isWeekendDay(dj.dayType)) newIWeekend += 1;
+            if (isWeekendDay(dj.dayType)) newJWeekend -= 1;
+            if (isWeekendDay(di.dayType)) newJWeekend += 1;
 
             const oldVar = Math.abs(localStats[i].hours - localStats[j].hours);
             const newVar = Math.abs(newIHrs - newJHrs);
@@ -454,7 +497,6 @@ export function generateScheduleForMonth(
             const newWkendVar = Math.abs(newIWeekend - newJWeekend);
 
             if (newVar < oldVar || (newVar === oldVar && newWkendVar < oldWkendVar)) {
-              // Do the swap
               di.empIdx = j;
               di.empName = activeEmployees[j].name;
               di.empHrid = activeEmployees[j].hrid;
@@ -467,20 +509,15 @@ export function generateScheduleForMonth(
               localStats[i].weekend = newIWeekend;
               localStats[j].weekend = newJWeekend;
 
-              // Update sat/fri counts
               if (di.dayType === "Saturday") {
-                localStats[i].sat -= 1;
-                localStats[j].sat += 1;
+                localStats[i].sat -= 1; localStats[j].sat += 1;
               } else if (di.dayType === "Friday") {
-                localStats[i].fri -= 1;
-                localStats[j].fri += 1;
+                localStats[i].fri -= 1; localStats[j].fri += 1;
               }
               if (dj.dayType === "Saturday") {
-                localStats[j].sat -= 1;
-                localStats[i].sat += 1;
+                localStats[j].sat -= 1; localStats[i].sat += 1;
               } else if (dj.dayType === "Friday") {
-                localStats[j].fri -= 1;
-                localStats[i].fri += 1;
+                localStats[j].fri -= 1; localStats[i].fri += 1;
               }
 
               optimized = true;
@@ -493,29 +530,56 @@ export function generateScheduleForMonth(
     }
   }
 
-  // === STEP 4: Update cumulative stats ===
+  // === STEP 5: UPDATE CUMULATIVE STATS ===
   for (const r of entries) {
     if (r.isManual) continue;
     const ei = r.empIdx;
     cumStats[ei].totalHours += r.hours;
     cumStats[ei].totalDays += 1;
-    if (r.dayType === "Saturday" || r.dayType === "Friday") {
-      cumStats[ei].weekendDays += 1;
-    }
+    if (isWeekendDay(r.dayType)) cumStats[ei].weekendDays += 1;
     if (r.dayType === "Saturday") cumStats[ei].saturdays += 1;
     if (r.dayType === "Friday") cumStats[ei].fridays += 1;
   }
-
-  for (const [ei, count] of Object.entries(offCountThisMonth)) {
-    cumStats[Number(ei)].offWeeks += count;
+  for (let i = 0; i < n; i++) {
+    cumStats[i].offWeeks += localStats[i].offWeeks;
   }
 
   return { entries, localStats, cumulativeStats: cumStats, weekOffMap };
 }
 
-/**
- * Generate schedule for a single week starting from a given date.
- */
+function wouldBeConsecutive(
+  allEntries: ScheduleEntry[],
+  entryA: ScheduleEntry,
+  entryB: ScheduleEntry,
+  newOwnerA: number,
+  newOwnerB: number
+): boolean {
+  const dateA = entryA.date;
+  const dateB = entryB.date;
+
+  const newOwnerADates = allEntries
+    .filter((e) => e.empIdx === newOwnerA && e.date !== dateA && e.date !== dateB && e.hours > 0 && !e.isHoliday)
+    .map((e) => e.date);
+
+  for (const d of newOwnerADates) {
+    const diff = Math.abs(new Date(dateB).getTime() - new Date(d).getTime()) / (1000 * 60 * 60 * 24);
+    if (diff <= 1) return true;
+  }
+
+  const newOwnerBDates = allEntries
+    .filter((e) => e.empIdx === newOwnerB && e.date !== dateA && e.date !== dateB && e.hours > 0 && !e.isHoliday)
+    .map((e) => e.date);
+
+  for (const d of newOwnerBDates) {
+    const diff = Math.abs(new Date(dateA).getTime() - new Date(d).getTime()) / (1000 * 60 * 60 * 24);
+    if (diff <= 1) return true;
+  }
+
+  return false;
+}
+
+// ===== Week Generation =====
+
 export function generateScheduleForWeek(
   startDate: string,
   employees: Employee[],
@@ -525,7 +589,6 @@ export function generateScheduleForWeek(
 ): { entries: ScheduleEntry[]; localStats: Record<number, LocalStats>; cumulativeStats: Record<number, CumulativeStats> } {
   const start = new Date(startDate + "T00:00:00");
 
-  // Determine which month this week belongs to (majority of days)
   const weekDates: Date[] = [];
   for (let i = 0; i < 7; i++) {
     const d = new Date(start);
@@ -533,7 +596,6 @@ export function generateScheduleForWeek(
     weekDates.push(d);
   }
 
-  // Use the month that has the most days in this week
   const monthCounts: Record<string, number> = {};
   for (const d of weekDates) {
     const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
@@ -544,10 +606,8 @@ export function generateScheduleForWeek(
   const year = Number(yearStr);
   const month = Number(monthStr);
 
-  // Generate the full month but only return this week's entries
   const result = generateScheduleForMonth(year, month, employees, settings, existingCumStats, existingEntries);
 
-  // Filter to only this week's entries
   const weekStartStr = formatDate(start);
   const weekEnd = new Date(start);
   weekEnd.setDate(weekEnd.getDate() + 6);
@@ -564,64 +624,27 @@ export function generateScheduleForWeek(
   };
 }
 
-/**
- * Recalculate hours for existing schedule entries (e.g., after settings change).
- * IMPORTANT: Holidays are determined dynamically from settings.holidays (NOT from isHoliday flag).
- */
+// ===== Utility: Recalculate Hours =====
+
 export function recalcScheduleHours(
   entries: ScheduleEntry[],
   settings: Settings
 ): ScheduleEntry[] {
-  console.log("[recalcScheduleHours] Input:", {
-    entriesCount: entries.length,
-    holidaysInSettings: settings.holidays,
-    holidayHours: settings.holidayHours,
-  });
-
-  // Create a holiday set for quick lookup
   const holidaySet = new Set(settings.holidays || []);
-
-  const result = entries.map((entry) => {
+  return entries.map((entry) => {
     if (entry.isManual) return entry;
-
-    // DETERMINE HOLIDY STATUS DYNAMICALLY FROM SETTINGS
     const isHolidayDynamic = holidaySet.has(entry.date);
-
-    // Holidays = 0 hours (not working days)
     if (isHolidayDynamic) {
-      console.log(`[recalcScheduleHours] Holiday ${entry.date}:`, {
-        isHolidayDynamic,
-        // Hours will be 0 for holidays
-        // holidayHours is used for deduction display, not as actual work hours
-      });
-      const zeroShift: ShiftConfig = { start: "00:00 AM", end: "00:00 AM", hours: 0 };
-      return {
-        ...entry,
-        start: zeroShift.start,
-        end: zeroShift.end,
-        hours: 0, // HOLIDAYS: 0 hours (not working)
-        isHoliday: isHolidayDynamic, // Update the flag to match settings
-      };
+      return { ...entry, start: "00:00 AM", end: "00:00 AM", hours: 0, isHoliday: true };
     }
-
     const shift = shiftForType(entry.dayType, settings, false);
     const hrs = getHoursForDate(entry.date, settings, false);
-    return {
-      ...entry,
-      start: shift.start,
-      end: shift.end,
-      hours: hrs,
-      isHoliday: false, // Update the flag to match settings
-    };
+    return { ...entry, start: shift.start, end: shift.end, hours: hrs, isHoliday: false };
   });
-
-  console.log("[recalcScheduleHours] Output - holiday entries:", result.filter(e => holidaySet.has(e.date)).map(e => ({ date: e.date, hours: e.hours, isHoliday: e.isHoliday })));
-  return result;
 }
 
-/**
- * Get local stats from entries.
- */
+// ===== Stats Computation =====
+
 export function computeLocalStats(entries: ScheduleEntry[], employeeCount: number): Record<number, LocalStats> {
   const stats: Record<number, LocalStats> = {};
   for (let i = 0; i < employeeCount; i++) {
@@ -633,37 +656,28 @@ export function computeLocalStats(entries: ScheduleEntry[], employeeCount: numbe
     }
     stats[r.empIdx].days += 1;
     stats[r.empIdx].hours += r.hours;
-    if (r.dayType === "Saturday" || r.dayType === "Friday") stats[r.empIdx].weekend += 1;
+    if (isWeekendDay(r.dayType)) stats[r.empIdx].weekend += 1;
     if (r.dayType === "Saturday") stats[r.empIdx].sat += 1;
     if (r.dayType === "Friday") stats[r.empIdx].fri += 1;
   }
   return stats;
 }
 
-/**
- * Compute OFF weeks from entries.
- */
 export function computeOffWeeks(entries: ScheduleEntry[], employeeCount: number): Record<number, number> {
   const offWeeks: Record<number, number> = {};
   for (let i = 0; i < employeeCount; i++) offWeeks[i] = 0;
-  
   const seen = new Set<string>();
   for (const e of entries) {
     const key = `${e.date.substring(0, 7)}-W${e.weekNum}`;
     const fullKey = `${key}-${e.offPersonIdx}`;
     if (!seen.has(fullKey)) {
       seen.add(fullKey);
-      if (offWeeks[e.offPersonIdx] !== undefined) {
-        offWeeks[e.offPersonIdx]++;
-      }
+      if (offWeeks[e.offPersonIdx] !== undefined) offWeeks[e.offPersonIdx]++;
     }
   }
   return offWeeks;
 }
 
-/**
- * Get week number key (Friday-based).
- */
 export function getWeekKey(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
   const fri = new Date(d);
@@ -671,13 +685,58 @@ export function getWeekKey(dateStr: string): string {
   return fri.toISOString().substring(0, 10);
 }
 
-/**
- * Get weeks in a specific month (configurable week start).
- */
 export function getMonthWeeks(year: number, month: number, weekStart: string = "Friday"): { weekStart: string; weekEnd: string }[] {
   const weeks = getWeeksInMonth(year, month, weekStart);
   return weeks.map((weekDays) => ({
     weekStart: formatDate(weekDays[0]),
     weekEnd: formatDate(weekDays[6]),
   }));
+}
+
+// ===== Connection Team =====
+
+export function generateConnectionTeamSchedule(
+  weeks: Array<{ weekStart: string; weekEnd: string }>,
+  employees: Employee[],
+  existingCumWeeks?: Record<string, number>,
+  existingHelpDeskHours?: Record<string, number>
+): Array<{ weekStart: string; weekEnd: string; empIdx: number; empName: string; empHrid: string }> {
+  const connectionEmps = employees.filter((e) => e.active);
+  const n = connectionEmps.length;
+  if (n === 0) return [];
+
+  const assignments: Record<number, number> = {};
+  connectionEmps.forEach((_, i) => { assignments[i] = 0; });
+
+  const result: Array<{ weekStart: string; weekEnd: string; empIdx: number; empName: string; empHrid: string }> = [];
+  let lastAssigned = -1;
+
+  for (const week of weeks) {
+    const scored = connectionEmps.map((emp, i) => {
+      let score = 0;
+      const cumWeeks = (existingCumWeeks?.[emp.name] || 0) + assignments[i];
+      score += cumWeeks * 100;
+      const hdHours = existingHelpDeskHours?.[emp.name] || 0;
+      score -= hdHours * 0.5;
+      // Don't assign same person consecutively if possible
+      if (i === lastAssigned && n > 1) score += 50;
+      score += i * 0.01;
+      return { idx: i, score };
+    });
+
+    scored.sort((a, b) => a.score - b.score);
+    const chosen = scored[0].idx;
+    assignments[chosen]++;
+    lastAssigned = chosen;
+
+    result.push({
+      weekStart: week.weekStart,
+      weekEnd: week.weekEnd,
+      empIdx: chosen,
+      empName: connectionEmps[chosen].name,
+      empHrid: connectionEmps[chosen].hrid,
+    });
+  }
+
+  return result;
 }

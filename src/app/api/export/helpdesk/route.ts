@@ -10,9 +10,11 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { month, selectedEmployeeIds, dateFrom, dateTo, region } = body;
+    const { month, selectedEmployeeIds, dateFrom, dateTo, regions } = body;
 
-    console.log("[Export Helpdesk] Request:", { month, selectedEmployeeIds, dateFrom, dateTo, region });
+    const regionList: string[] = Array.isArray(regions) ? regions : (regions ? [regions] : []);
+
+    console.log("[Export Helpdesk] Request:", { month, selectedEmployeeIds, dateFrom, dateTo, regions: regionList });
 
     // Fetch all schedule entries and employees
     const allEntries = await db.scheduleEntry.findMany();
@@ -24,17 +26,67 @@ export async function POST(request: NextRequest) {
       const inDateRange = dateFrom && dateTo
         ? e.date >= dateFrom && e.date <= dateTo
         : true;
-      const inRegion = region && region !== "all" ? e.region === region : true;
+      const inRegion = regionList.length > 0 ? regionList.includes(e.region) : true;
       return inMonth && inDateRange && inRegion;
     });
 
-    let helpdeskData = helpdeskEntries;
+    let helpdeskData: any[] = helpdeskEntries;
 
     // Filter by selected employees if specified
     if (selectedEmployeeIds && selectedEmployeeIds.length > 0) {
       helpdeskData = helpdeskData.filter((e) => {
         const emp = allEmployees.find((emp) => emp.id === e.empIdx);
         return emp && selectedEmployeeIds.includes(emp.id);
+      });
+    }
+
+    // Generate all days of the selected month to fill gaps (Bug 4 fix)
+    if (month) {
+      const [y, m] = month.split("-");
+      const daysInMonth = new Date(Number(y), Number(m), 0).getDate();
+      const allDays: Set<string> = new Set(helpdeskData.map(e => e.date));
+
+      const regionsToShow = regionList;
+
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dateStr = `${month}-${String(day).padStart(2, "0")}`;
+        if (!allDays.has(dateStr)) {
+          const dayDate = new Date(dateStr + "T00:00:00");
+          const jsDay = dayDate.getDay();
+          let dayName = "Weekday";
+          if (jsDay === 5) dayName = "Friday";
+          else if (jsDay === 6) dayName = "Saturday";
+          else if (jsDay === 4) dayName = "Thursday";
+
+          for (const region of regionsToShow) {
+            helpdeskData.push({
+              id: 0,
+              date: dateStr,
+              dayName: dayName,
+              dayType: dayName,
+              empIdx: 0,
+              empName: "—",
+              empHrid: "—",
+              start: "—",
+              end: "—",
+              hours: 0,
+              offPerson: "",
+              offPersonIdx: 0,
+              offPersonHrid: "",
+              weekNum: 0,
+              isHoliday: false,
+              isManual: false,
+              monthKey: month,
+              region: region,
+              createdAt: "",
+            });
+          }
+        }
+      }
+
+      helpdeskData.sort((a, b) => {
+        if (a.date !== b.date) return a.date.localeCompare(b.date);
+        return (a.region || "").localeCompare(b.region || "");
       });
     }
 
@@ -53,6 +105,7 @@ export async function POST(request: NextRequest) {
       { header: "Type", key: "type", width: 15 },
       { header: "Employee", key: "employee", width: 24 },
       { header: "HRID", key: "hrid", width: 12 },
+      { header: "Region", key: "region", width: 14 },
       { header: "Start", key: "start", width: 12 },
       { header: "End", key: "end", width: 12 },
       { header: "Hours", key: "hours", width: 10 },
@@ -61,9 +114,9 @@ export async function POST(request: NextRequest) {
     ];
 
     // Add title
-    ws1.mergeCells("A1:J1");
+    ws1.mergeCells("A1:K1");
     const titleCell1 = ws1.getCell("A1");
-    const regionLabel = region && region !== "all" ? ` [${region.toUpperCase()}]` : " [ALL REGIONS]";
+    const regionLabel = regionList.length > 0 ? ` [${regionList.map(r => r.toUpperCase()).join(", ")}]` : " [ALL REGIONS]";
     titleCell1.value = `IT Helpdesk Schedule${regionLabel}`;
     titleCell1.font = { size: 16, bold: true, color: { argb: "059669" } };
     titleCell1.alignment = { horizontal: "center", vertical: "middle" };
@@ -79,7 +132,7 @@ export async function POST(request: NextRequest) {
     if (dateFrom && dateTo) {
       periodText = `${dateFrom} to ${dateTo}`;
     }
-    ws1.mergeCells("A2:J2");
+    ws1.mergeCells("A2:K2");
     const periodCell1 = ws1.getCell("A2");
     periodCell1.value = periodText;
     periodCell1.font = { size: 12, italic: true, color: { argb: "64748B" } };
@@ -88,7 +141,7 @@ export async function POST(request: NextRequest) {
 
     // Style header
     const headerRow1 = 4;
-    const headers1 = ["Date", "Day", "Type", "Employee", "HRID", "Start", "End", "Hours", "OFF Person", "Holiday"];
+    const headers1 = ["Date", "Day", "Type", "Employee", "HRID", "Region", "Start", "End", "Hours", "OFF Person", "Holiday"];
     headers1.forEach((h, i) => {
       const cell = ws1.getCell(headerRow1, i + 1);
       cell.value = h;
@@ -131,39 +184,44 @@ export async function POST(request: NextRequest) {
       ws1.getCell(row, 5).alignment = { horizontal: "center", vertical: "middle" };
       ws1.getCell(row, 5).fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowFill } };
 
-      ws1.getCell(row, 6).value = e.start;
+      ws1.getCell(row, 6).value = e.region || "all";
       ws1.getCell(row, 6).alignment = { horizontal: "center", vertical: "middle" };
       ws1.getCell(row, 6).fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowFill } };
+      ws1.getCell(row, 6).font = { size: 9, color: { argb: "6B7280" } };
 
-      ws1.getCell(row, 7).value = e.end;
+      ws1.getCell(row, 7).value = e.start;
       ws1.getCell(row, 7).alignment = { horizontal: "center", vertical: "middle" };
       ws1.getCell(row, 7).fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowFill } };
 
-      ws1.getCell(row, 8).value = e.hours;
-      ws1.getCell(row, 8).numFmt = "0.0";
+      ws1.getCell(row, 8).value = e.end;
       ws1.getCell(row, 8).alignment = { horizontal: "center", vertical: "middle" };
       ws1.getCell(row, 8).fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowFill } };
-      ws1.getCell(row, 8).font = { color: { argb: "059669" }, bold: true };
 
-      ws1.getCell(row, 9).value = e.offPerson || "";
-      ws1.getCell(row, 9).alignment = { horizontal: "left", vertical: "middle" };
+      ws1.getCell(row, 9).value = e.hours;
+      ws1.getCell(row, 9).numFmt = "0.0";
+      ws1.getCell(row, 9).alignment = { horizontal: "center", vertical: "middle" };
       ws1.getCell(row, 9).fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowFill } };
+      ws1.getCell(row, 9).font = { color: { argb: "059669" }, bold: true };
+
+      ws1.getCell(row, 10).value = e.offPerson || "";
+      ws1.getCell(row, 10).alignment = { horizontal: "left", vertical: "middle" };
+      ws1.getCell(row, 10).fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowFill } };
       if (e.offPerson) {
-        ws1.getCell(row, 9).font = { color: { argb: "DC2626" }, bold: true };
+        ws1.getCell(row, 10).font = { color: { argb: "DC2626" }, bold: true };
       }
 
-      ws1.getCell(row, 10).value = isHoliday ? "Yes" : "No";
-      ws1.getCell(row, 10).alignment = { horizontal: "center", vertical: "middle" };
-      ws1.getCell(row, 10).fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowFill } };
+      ws1.getCell(row, 11).value = isHoliday ? "Yes" : "No";
+      ws1.getCell(row, 11).alignment = { horizontal: "center", vertical: "middle" };
+      ws1.getCell(row, 11).fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowFill } };
     });
 
     // Add Helpdesk summary
     const helpdeskSummaryRow = headerRow1 + helpdeskData.length + 2;
-    const totalHours1 = helpdeskData.reduce((sum, e) => sum + e.hours, 0);
-    const workDays1 = helpdeskData.filter(e => e.hours > 0).length;
-    const holidays1 = helpdeskData.filter(e => e.isHoliday).length;
+    const totalHours1 = helpdeskData.filter(e => e.empName !== "—").reduce((sum, e) => sum + e.hours, 0);
+    const workDays1 = helpdeskData.filter(e => e.empName !== "—" && e.hours > 0).length;
+    const holidays1 = helpdeskData.filter(e => e.empName !== "—" && e.isHoliday).length;
 
-    ws1.mergeCells(helpdeskSummaryRow, 1, helpdeskSummaryRow, 10);
+    ws1.mergeCells(helpdeskSummaryRow, 1, helpdeskSummaryRow, 11);
     const summaryCell1 = ws1.getCell(helpdeskSummaryRow, 1);
     summaryCell1.value = `HELPDESK SUMMARY: ${helpdeskData.length} entries | ${workDays1} work days | ${totalHours1.toFixed(1)} total hours | ${holidays1} holidays`;
     summaryCell1.font = { size: 11, bold: true, color: { argb: "059669" } };
@@ -208,10 +266,11 @@ export async function POST(request: NextRequest) {
     });
     ws2.getRow(headerRow2).height = 28;
 
-    // Calculate employee stats
+    // Calculate employee stats (skip placeholder rows)
     const employeeStats = new Map<string, { name: string; hrid: string; workDays: number; totalHours: number }>();
     
     helpdeskData.forEach((e) => {
+      if (e.empName === "—") return; // Skip placeholder rows
       const key = `${e.empHrid}_${e.empName}`;
       if (!employeeStats.has(key)) {
         employeeStats.set(key, { name: e.empName, hrid: e.empHrid, workDays: 0, totalHours: 0 });
@@ -378,7 +437,7 @@ export async function POST(request: NextRequest) {
       status: 200,
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "Content-Disposition": `attachment; filename="Helpdesk_Schedule_${region || "all"}.xlsx"`,
+        "Content-Disposition": `attachment; filename="Helpdesk_Schedule_${regionList.length > 0 ? regionList.join("_") : "all"}.xlsx"`,
       },
     });
   } catch (error) {

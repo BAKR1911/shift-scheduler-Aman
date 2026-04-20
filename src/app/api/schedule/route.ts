@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkAuth, unauthorizedResponse, forbiddenResponse } from "@/lib/auth";
+import { checkAuth, unauthorizedResponse, forbiddenResponse, isAdmin } from "@/lib/auth";
 import { generateScheduleForMonth, generateScheduleForWeek, computeLocalStats, computeOffWeeks } from "@/lib/scheduler";
 import type { Employee, Settings, ScheduleEntry, CumulativeStats } from "@/lib/scheduler";
 import { db } from "@/lib/db";
@@ -98,16 +98,17 @@ export async function GET(request: NextRequest) {
 }
 
 // POST: Generate schedule — fully region-isolated
+// Supports `force: true` to regenerate already-generated months
 export async function POST(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
-  if (auth.role !== "admin" && auth.role !== "editor") return forbiddenResponse();
+  if (!isAdmin(auth.role) && auth.role !== "editor") return forbiddenResponse();
 
   try {
     const body = await request.json();
-    const { mode, year, month, weekStart, region } = body;
+    const { mode, year, month, weekStart, region, force } = body;
 
-    console.log(`[ScheduleGen] Request received - mode: ${mode}, region: ${region}, year: ${year}, month: ${month}, weekStart: ${weekStart}, auth.region: ${auth.region}`);
+    console.log(`[ScheduleGen] Request received - mode: ${mode}, region: ${region}, year: ${year}, month: ${month}, weekStart: ${weekStart}, force: ${force}, auth.region: ${auth.region}`);
 
     if (!mode) {
       return NextResponse.json({ error: "Mode is required (week or month)" }, { status: 400 });
@@ -274,6 +275,19 @@ export async function POST(request: NextRequest) {
 
       const monthKey = `${year}-${String(month).padStart(2, "0")}`;
 
+      // === PROTECTION: Don't regenerate already-generated months ===
+      // If this month+region was already generated and force is not true, return existing data
+      if (!force && existingGenMonths.includes(monthKey)) {
+        console.log(`[ScheduleGen] Month "${monthKey}" for region "${effectiveRegion}" already generated. Returning existing data. Use force=true to regenerate.`);
+        return NextResponse.json({
+          alreadyGenerated: true,
+          message: `Schedule for ${monthKey} (${effectiveRegion}) already exists. Use "Regenerate" to overwrite.`,
+          generated: 0,
+          monthKey,
+          region: effectiveRegion,
+        });
+      }
+
       // Delete existing non-manual entries for this month + region using DB region column
       const deleteWhere: Record<string, unknown> = {
         date: { startsWith: monthKey },
@@ -400,7 +414,7 @@ export async function POST(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
-  if (auth.role !== "admin" && auth.role !== "editor") return forbiddenResponse();
+  if (!isAdmin(auth.role) && auth.role !== "editor") return forbiddenResponse();
 
   try {
     const { searchParams } = new URL(request.url);

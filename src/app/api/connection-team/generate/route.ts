@@ -1,21 +1,39 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkAuth, unauthorizedResponse, forbiddenResponse } from "@/lib/auth";
+import { checkAuth, isAdmin } from "@/lib/auth";
+import { generateConnectionTeamSchedule } from "@/lib/scheduler";
 import { db } from "@/lib/db";
 
-// POST: Generate Connection Team schedule for a month (auto-balanced rotation)
+// POST: Generate Connection Team schedule for a month (Target-Based Balancing)
+// Supports `force: true` to regenerate already-generated months
 export async function POST(request: NextRequest) {
   const auth = checkAuth(request);
-  if (!auth) return unauthorizedResponse();
-  if (auth.role !== "admin" && auth.role !== "editor") {
+  if (!auth) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (!isAdmin(auth.role) && auth.role !== "editor") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   try {
     const body = await request.json();
-    const { monthKey, weeks } = body;
+    const { monthKey, weeks, force } = body;
 
     if (!monthKey || !weeks || !Array.isArray(weeks)) {
       return NextResponse.json({ error: "monthKey and weeks are required" }, { status: 400 });
+    }
+
+    // === PROTECTION: Don't regenerate already-generated months ===
+    const existingEntries = await db.connectionTeam.findMany();
+    const existingForMonth = existingEntries.filter((e) => e.monthKey === monthKey);
+
+    if (!force && existingForMonth.length > 0) {
+      console.log(`[ConnectionTeamGen] Month "${monthKey}" already has ${existingForMonth.length} entries. Use force=true to regenerate.`);
+      return NextResponse.json({
+        alreadyGenerated: true,
+        message: `Connection Team schedule for ${monthKey} already exists. Use "Regenerate" to overwrite.`,
+        generated: 0,
+        assignments: {},
+      });
     }
 
     // Fetch all connection team employees
@@ -26,70 +44,78 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No active Connection Team employees found" }, { status: 400 });
     }
 
-    // Clear existing connection team entries for this month
-    const existingEntries = await db.connectionTeam.findMany();
-    const entriesToDelete = existingEntries.filter((e) => e.monthKey === monthKey);
-
-    if (entriesToDelete.length > 0) {
-      for (const entry of entriesToDelete) {
+    // Clear existing connection team entries for this month (only when force=true or first time)
+    if (existingForMonth.length > 0) {
+      for (const entry of existingForMonth) {
         await db.connectionTeam.delete({ where: { id: entry.id } });
       }
     }
 
-    // Generate balanced rotation algorithm
-    // Each employee gets approximately equal number of weeks
-    const empAssignments: Record<string, number> = {};
-    connectionEmps.forEach((e) => { empAssignments[e.name] = 0; });
+    // Calculate cumulative connection weeks for each employee (from previous months)
+    const cumWeeks: Record<string, number> = {};
+    connectionEmps.forEach((e) => { cumWeeks[e.name] = 0; });
+    const prevMonthEntries = existingEntries.filter((e) => e.monthKey !== monthKey);
+    for (const entry of prevMonthEntries) {
+      if (cumWeeks[entry.empName] !== undefined) {
+        cumWeeks[entry.empName]++;
+      }
+    }
 
-    const newEntries: {
-      empIdx: number;
-      empName: string;
-      empHrid: string;
-      weekStart: string;
-      weekEnd: string;
-      monthKey: string;
-    }[] = [];
+    // Calculate HelpDesk hours for each connection employee (for load balancing)
+    const hdHours: Record<string, number> = {};
+    connectionEmps.forEach((e) => { hdHours[e.name] = 0; });
+    const allScheduleEntries = await db.scheduleEntry.findMany();
+    for (const entry of allScheduleEntries) {
+      if (hdHours[entry.empName] !== undefined) {
+        hdHours[entry.empName] += entry.hours;
+      }
+    }
 
-    // Assign employees to weeks using round-robin with balance consideration
-    weeks.forEach((week) => {
-      // Find employee with minimum assignments
-      const minAssignments = Math.min(...Object.values(empAssignments));
-      const candidates = connectionEmps.filter((e) => empAssignments[e.name] === minAssignments);
+    // Use the new Target-Based scheduler
+    const employees = connectionEmps.map((e) => ({
+      id: e.id,
+      name: e.name,
+      hrid: e.hrid,
+      active: true,
+    }));
 
-      // Pick random from candidates (or first if only one)
-      const selectedEmp = candidates[Math.floor(Math.random() * candidates.length)];
-
-      newEntries.push({
-        empIdx: connectionEmps.indexOf(selectedEmp),
-        empName: selectedEmp.name,
-        empHrid: selectedEmp.hrid,
-        weekStart: week.weekStart,
-        weekEnd: week.weekEnd,
-        monthKey,
-      });
-
-      // Increment assignment count
-      empAssignments[selectedEmp.name]++;
-    });
+    const newEntries = generateConnectionTeamSchedule(weeks, employees, cumWeeks, hdHours);
 
     // Insert new entries
     let created = 0;
     for (const entry of newEntries) {
       try {
-        await db.connectionTeam.create({ data: entry });
+        await db.connectionTeam.create({
+          data: {
+            empIdx: entry.empIdx,
+            empName: entry.empName,
+            empHrid: entry.empHrid,
+            weekStart: entry.weekStart,
+            weekEnd: entry.weekEnd,
+            monthKey,
+          },
+        });
         created++;
       } catch (e) {
-        console.error(`[Connection Team Gen] Failed to create entry for week ${entry.weekStart}:`, e);
+        console.error(`[ConnectionTeamGen] Failed to create entry for week ${entry.weekStart}:`, e);
       }
     }
 
-    console.log(`[Connection Team Gen] Generated ${created} entries for month ${monthKey}`);
-    console.log(`[Connection Team Gen] Assignments:`, empAssignments);
+    // Compute assignments summary
+    const assignments: Record<string, number> = {};
+    connectionEmps.forEach((e) => { assignments[e.name] = 0; });
+    for (const entry of newEntries) {
+      assignments[entry.empName]++;
+    }
+
+    console.log(`[ConnectionTeamGen] Generated ${created} entries for month ${monthKey}`);
+    console.log(`[ConnectionTeamGen] Assignments:`, assignments);
+    console.log(`[ConnectionTeamGen] HelpDesk hours considered:`, hdHours);
 
     return NextResponse.json({
       success: true,
       generated: created,
-      assignments: empAssignments,
+      assignments,
     });
   } catch (error) {
     console.error("Error generating Connection Team schedule:", error);

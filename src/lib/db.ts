@@ -116,7 +116,7 @@ let _dbMode: "turso" | "local" | "memory" = "memory";
 function getClient(): Client {
   if (_client) return _client;
 
-  const url = process.env.TURSO_DATABASE_URL;
+  const url = process.env.TURSO_DATABASE_URL || process.env.DATABASE_URL;
   const authToken = process.env.TURSO_AUTH_TOKEN;
 
   if (url && url.startsWith("libsql://")) {
@@ -130,7 +130,7 @@ function getClient(): Client {
   } else {
     _client = createClient({ url: "file::memory:" });
     _dbMode = "memory";
-    console.log("[DB] Using in-memory database (no TURSO_DATABASE_URL set)");
+    console.log("[DB] Using in-memory database (no TURSO_DATABASE_URL or DATABASE_URL set)");
   }
 
   return _client;
@@ -817,8 +817,14 @@ export const db = {
         values.push(where.isManual ? 1 : 0);
       }
       if (where.region) {
-        sql += " AND region = ?";
-        values.push(where.region);
+        if (typeof where.region === "object" && (where.region as Record<string, unknown>).in) {
+          const regions = (where.region as Record<string, unknown>).in as string[];
+          sql += ` AND region IN (${regions.map(() => "?").join(", ")})`;
+          values.push(...regions);
+        } else {
+          sql += " AND region = ?";
+          values.push(where.region);
+        }
       }
 
       if (args?.orderBy) {
@@ -1106,8 +1112,14 @@ export const db = {
         values.push(args.where.monthKey);
       }
       if (args?.where?.region) {
-        sql += " AND region = ?";
-        values.push(args.where.region);
+        if (typeof args.where.region === "object" && (args.where.region as Record<string, unknown>).in) {
+          const regions = (args.where.region as Record<string, unknown>).in as string[];
+          sql += ` AND region IN (${regions.map(() => "?").join(", ")})`;
+          values.push(...regions);
+        } else {
+          sql += " AND region = ?";
+          values.push(args.where.region);
+        }
       }
       if (args?.orderBy) {
         const [key, dir] = Object.entries(args.orderBy)[0];
@@ -1157,7 +1169,7 @@ export const db = {
 
   // ===== ConnectionTeam Model =====
   connectionTeam: {
-    async findMany(args?: { where?: { monthKey?: string; region?: string } }) {
+    async findMany(args?: { where?: { monthKey?: string; region?: string | { in: string[] } } }) {
       await ensureInit();
       const client = getClient();
 
@@ -1168,8 +1180,14 @@ export const db = {
         values.push(args.where.monthKey);
       }
       if (args?.where?.region) {
-        sql += " AND region = ?";
-        values.push(args.where.region);
+        if (typeof args.where.region === "object" && (args.where.region as Record<string, unknown>).in) {
+          const regions = (args.where.region as Record<string, unknown>).in as string[];
+          sql += ` AND region IN (${regions.map(() => "?").join(", ")})`;
+          values.push(...regions);
+        } else {
+          sql += " AND region = ?";
+          values.push(args.where.region);
+        }
       }
       sql += " ORDER BY week_start ASC";
 

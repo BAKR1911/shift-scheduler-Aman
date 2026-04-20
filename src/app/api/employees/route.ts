@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkAuth, unauthorizedResponse, forbiddenResponse } from "@/lib/auth";
+import { checkAuth, unauthorizedResponse, forbiddenResponse, isAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 
 // GET: List employees (non-admin users only see their region)
@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
     });
 
     // Non-admin users with a specific region only see their region's employees (STRICT)
-    if (auth.role !== "admin" && auth.region && auth.region !== "all") {
+    if (!isAdmin(auth.role) && auth.region && auth.region !== "all") {
       const filtered = allEmployees.filter((e) => e.region === auth.region);
       return NextResponse.json({ employees: filtered });
     }
@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
-  if (auth.role !== "admin" && auth.role !== "editor") return forbiddenResponse();
+  if (!isAdmin(auth.role) && auth.role !== "editor") return forbiddenResponse();
 
   try {
     const body = await request.json();
@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
-  if (auth.role !== "admin" && auth.role !== "editor") return forbiddenResponse();
+  if (!isAdmin(auth.role) && auth.role !== "editor") return forbiddenResponse();
 
   try {
     const body = await request.json();
@@ -99,7 +99,7 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
-  if (auth.role !== "admin") return forbiddenResponse();
+  if (!isAdmin(auth.role)) return forbiddenResponse();
 
   try {
     const body = await request.json();

@@ -17,11 +17,12 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Calendar, Users, Settings, Plus, Trash2, RefreshCw,
+  Calendar, Users, Settings, Plus, Trash2, RefreshCw, TrendingUp,
   CalendarDays, Clock, Sun, Moon, X, ArrowLeftRight, AlertTriangle,
   CheckCircle, Info, ChevronDown, ChevronUp, FileSpreadsheet, BarChart3,
   Sparkles, Eye, EyeOff, LogOut, User, Shield, KeyRound, Lock, HeadphonesIcon,
-  Pencil, Download, UserCog, Link2, MapPin, RotateCcw, ClipboardList, Search
+  Pencil, Download, UserCog, Link2, MapPin, RotateCcw, ClipboardList, Search, LayoutGrid,
+  Loader2, Activity
 } from "lucide-react";
 import { computeLocalStats, computeOffWeeks, recalcScheduleHours } from "@/lib/scheduler";
 
@@ -244,35 +245,36 @@ function LoginScreen({
   loginPassword: string;
 }) {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 px-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-emerald-50 to-teal-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 px-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-[#0F172A] to-[#1D4ED8] shadow-lg mb-4">
             <HeadphonesIcon className="h-8 w-8 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">
+          <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100 flex items-center justify-center gap-2">
+            <Calendar className="h-8 w-8 text-emerald-600" />
             IT Helpdesk Shift Scheduler
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
             Sign in to access the scheduling system
           </p>
         </div>
-        <Card className="shadow-lg border-slate-200 dark:border-slate-800">
+        <Card className="shadow-lg border-slate-200 dark:border-slate-800 hover:shadow-lg hover:shadow-emerald-100 dark:hover:shadow-emerald-900/20 transition-all duration-300 animate-in fade-in-0 zoom-in-95 duration-500">
           <CardContent className="p-6">
             <form onSubmit={(e) => { e.preventDefault(); onLogin(); }} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="username" className="text-sm font-medium text-slate-700 dark:text-slate-300">Username</Label>
                 <div className="relative">
                   <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <Input id="username" type="text" placeholder="Enter your username" value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} className="pl-10 h-11" autoComplete="username" required />
+                  <Input id="username" type="text" placeholder="Enter your username" value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} className="pl-10 h-11 placeholder:text-slate-400 dark:placeholder:text-slate-500" autoComplete="username" required />
                 </div>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="password" className="text-sm font-medium text-slate-700 dark:text-slate-300">Password</Label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <Input id="password" type={showPassword ? "text" : "password"} placeholder="Enter your password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} className="pl-10 pr-10 h-11" autoComplete="current-password" required />
-                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors" tabIndex={-1}>
+                  <Input id="password" type={showPassword ? "text" : "password"} placeholder="Enter your password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} className="pl-10 pr-10 h-11 placeholder:text-slate-400 dark:placeholder:text-slate-500" autoComplete="current-password" required />
+                  <button type="button" onClick={() => setShowPassword(!showPassword)} aria-label={showPassword ? "Hide password" : "Show password"} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors" tabIndex={-1}>
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
@@ -283,9 +285,10 @@ function LoginScreen({
                   <span className="text-sm text-red-700 dark:text-red-300">{loginError}</span>
                 </div>
               )}
-              <Button type="submit" disabled={loginLoading} className="w-full h-11 bg-gradient-to-r from-[#0F172A] to-[#1D4ED8] hover:from-[#0F172A]/90 hover:to-[#1D4ED8]/90 text-white font-semibold text-sm">
-                {loginLoading ? <span className="flex items-center gap-2"><RefreshCw className="h-4 w-4 animate-spin" /> Signing in...</span> : "Sign In"}
+              <Button type="submit" disabled={loginLoading} className="w-full h-11 bg-gradient-to-r from-[#0F172A] to-[#1D4ED8] hover:from-emerald-700 hover:to-emerald-600 hover:shadow-lg hover:shadow-emerald-200 dark:hover:shadow-emerald-900/30 transition-all duration-200 text-white font-semibold text-sm">
+                {loginLoading ? <span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Signing in...</span> : "Sign In"}
               </Button>
+              <p className="text-center text-xs text-slate-400 mt-3">Powered by Z.ai Shift Scheduler</p>
             </form>
           </CardContent>
         </Card>
@@ -310,6 +313,9 @@ export default function ShiftSchedulerPage() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [authChecking, setAuthChecking] = useState(true);
+  const [recentActivity, setRecentActivity] = useState<Array<{action: string; time: string}>>([]);
+
+  const addActivity = useCallback((action: string) => { setRecentActivity(prev => [{action, time: new Date().toLocaleTimeString()}, ...prev].slice(0, 5)); }, []);
 
   // Change password
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -339,6 +345,7 @@ export default function ShiftSchedulerPage() {
   // Modals
   const [showSettings, setShowSettings] = useState(false);
   const [showEmployees, setShowEmployees] = useState(false);
+  const [empSearchQuery, setEmpSearchQuery] = useState("");
   const [showAddShift, setShowAddShift] = useState(false);
   const [showStats, setShowStats] = useState(false);
   const [showExport, setShowExport] = useState(false);
@@ -375,8 +382,9 @@ export default function ShiftSchedulerPage() {
   const [exportSelectedIds, setExportSelectedIds] = useState<number[]>([]);
   const [exportDateFrom, setExportDateFrom] = useState("");
   const [exportDateTo, setExportDateTo] = useState("");
-  const [exportRegion, setExportRegion] = useState<string>("cairo");
-  const [exportType, setExportType] = useState<"helpdesk" | "connection" | "hrid">("helpdesk");
+  const [exportRegions, setExportRegions] = useState<string[]>([]);
+  const toggleExportRegion = (r: string) => setExportRegions(prev => prev.includes(r) ? prev.filter(x => x !== r) : [...prev, r]);
+  const [exportType, setExportType] = useState<"helpdesk" | "connection" | "hrid" | "matrix">("helpdesk");
   const [exportConnectionOnly, setExportConnectionOnly] = useState(false);
   const [exportHrid, setExportHrid] = useState("");
   const [exportHridMonthFrom, setExportHridMonthFrom] = useState("");
@@ -444,8 +452,8 @@ export default function ShiftSchedulerPage() {
   const [activeTab, setActiveTab] = useState<"helpdesk" | "connection">("helpdesk");
 
   // Role helpers
-  const canEdit = user && (user.role === "admin" || user.role === "editor");
-  const canAdmin = user && user.role === "admin";
+  const canEdit = user && (user.role === "admin" || user.role === "super_admin" || user.role === "editor");
+  const canAdmin = user && (user.role === "admin" || user.role === "super_admin");
 
   // Authenticated fetch wrapper
   const authFetch = useCallback(async (url: string, options: RequestInit = {}) => {
@@ -705,6 +713,7 @@ export default function ShiftSchedulerPage() {
       const data = await res.json();
       if (res.ok) {
         toast({ title: "Success", description: `Generated ${data.generated} shift entries for ${MONTHS[Number(m) - 1]} ${y}${selectedRegion !== "all" ? ` (${REGIONS[selectedRegion] || selectedRegion})` : ""}` });
+        addActivity(`Generated schedule for ${MONTHS[Number(m) - 1]} ${y}`);
         await fetchAllData();
       } else {
         toast({ title: "Error", description: data.error || "Generation failed", variant: "destructive" });
@@ -852,6 +861,7 @@ export default function ShiftSchedulerPage() {
         setSwapMode(false);
         setSwapFirst(null);
         toast({ title: "Swapped", description: `Swapped ${data.swapped} entries between ${empA.name} and ${empB.name}` });
+        addActivity(`Swapped shifts: ${empA.name} ↔ ${empB.name}`);
         await fetchAllData();
       } else {
         toast({ title: "Error", description: "Failed to swap", variant: "destructive" });
@@ -1023,6 +1033,7 @@ export default function ShiftSchedulerPage() {
 
   // ===== Export Both Teams =====
   const exportBothExcel = async () => {
+    if (exportRegions.length === 0) { toast({ title: "No region selected", description: "Please check at least one region to export", variant: "destructive" }); return; }
     setExporting(true);
     try {
       const res = await authFetch("/api/export/both", {
@@ -1032,7 +1043,7 @@ export default function ShiftSchedulerPage() {
           selectedEmployeeIds: exportSelectedIds.length > 0 ? exportSelectedIds : undefined,
           dateFrom: exportDateFrom || undefined,
           dateTo: exportDateTo || undefined,
-          region: exportRegion || selectedRegion,
+          regions: exportRegions.length > 0 ? exportRegions : [selectedRegion],
         }),
       });
       if (res.status === 401) { handleLogout(); return; }
@@ -1060,11 +1071,12 @@ export default function ShiftSchedulerPage() {
 
   // ===== Export Helpdesk =====
   const exportHelpdeskExcel = async () => {
+    if (exportRegions.length === 0) { toast({ title: "No region selected", description: "Please check at least one region to export", variant: "destructive" }); return; }
     setExporting(true);
     try {
       const res = await authFetch("/api/export/helpdesk", {
         method: "POST",
-        body: JSON.stringify({ month: selectedMonth, selectedEmployeeIds: exportSelectedIds.length > 0 ? exportSelectedIds : undefined, dateFrom: exportDateFrom || undefined, dateTo: exportDateTo || undefined, region: exportRegion || selectedRegion }),
+        body: JSON.stringify({ month: selectedMonth, selectedEmployeeIds: exportSelectedIds.length > 0 ? exportSelectedIds : undefined, dateFrom: exportDateFrom || undefined, dateTo: exportDateTo || undefined, regions: exportRegions.length > 0 ? exportRegions : [selectedRegion] }),
       });
       if (res.status === 401) { handleLogout(); return; }
       if (!res.ok) {
@@ -1084,6 +1096,38 @@ export default function ShiftSchedulerPage() {
       toast({ title: "Exporting", description: "Helpdesk Excel file downloaded" });
     } catch {
       toast({ title: "Error", description: "Failed to export Helpdesk", variant: "destructive" });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // ===== Export Matrix View =====
+  const exportMatrixExcel = async () => {
+    if (exportRegions.length === 0) { toast({ title: "No region selected", description: "Please check at least one region to export", variant: "destructive" }); return; }
+    setExporting(true);
+    try {
+      const res = await authFetch("/api/export-matrix", {
+        method: "POST",
+        body: JSON.stringify({ month: selectedMonth, regions: exportRegions.length > 0 ? exportRegions : [selectedRegion] }),
+      });
+      if (res.status === 401) { handleLogout(); return; }
+      if (!res.ok) {
+        const data = await res.json();
+        toast({ title: "Error", description: data.error || "Export failed", variant: "destructive" });
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Shift_Matrix_${selectedMonth}_${(exportRegions.length > 0 ? exportRegions.join("_") : selectedRegion).toUpperCase()}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast({ title: "Exporting", description: "Matrix View Excel file downloaded" });
+    } catch {
+      toast({ title: "Error", description: "Failed to export Matrix View", variant: "destructive" });
     } finally {
       setExporting(false);
     }
@@ -1336,6 +1380,7 @@ export default function ShiftSchedulerPage() {
       if (res.ok) {
         const data = await res.json();
         toast({ title: "Success", description: `Generated ${data.generated || 0} Connection Team assignments for ${MONTHS[month - 1]} ${year}` });
+        addActivity(`Generated Connection Team for ${MONTHS[month - 1]} ${year}`);
         await fetchConnectionTeam();
         await fetchConnAssignments();
       } else {
@@ -1353,13 +1398,15 @@ export default function ShiftSchedulerPage() {
   const clearConnectionTeam = async () => {
     setGenerating(true);
     try {
-      // Save current configuration as template
-      const currentConfig = connectionTeam.map(ct => ({
-        empName: ct.empName,
-        empHrid: ct.empHrid,
-        weekStart: ct.weekStart,
-        weekEnd: ct.weekEnd,
-      }));
+      // Save current configuration as template (only selected month)
+      const currentConfig = connectionTeam
+        .filter(ct => ct.monthKey === selectedMonth)
+        .map(ct => ({
+          empName: ct.empName,
+          empHrid: ct.empHrid,
+          weekStart: ct.weekStart,
+          weekEnd: ct.weekEnd,
+        }));
 
       // Save to localStorage as backup
       localStorage.setItem(`connection_team_backup_${selectedMonth}`, JSON.stringify({
@@ -1368,13 +1415,13 @@ export default function ShiftSchedulerPage() {
         config: currentConfig,
       }));
 
-      toast({ title: "Template Saved", description: `Current Connection Team configuration saved for ${selectedMonth}. You can restore it anytime.` });
+      toast({ title: "Template Saved", description: `Current Connection Team configuration saved for ${selectedMonth}.` });
 
-      // Clear all entries
-      const res = await authFetch("/api/connection-team", { method: "DELETE" });
+      // Clear only the selected month's entries
+      const res = await authFetch(`/api/connection-team?monthKey=${selectedMonth}`, { method: "DELETE" });
       if (res.ok) {
         const data = await res.json();
-        toast({ title: "Cleared", description: `Removed ${data.deleted || 0} Connection Team entries. Template saved in history.` });
+        toast({ title: "Cleared", description: `Removed ${data.deleted || 0} Connection Team entries for ${selectedMonth}.` });
         await fetchConnectionTeam();
         await fetchConnAssignments();
       } else {
@@ -1586,8 +1633,8 @@ export default function ShiftSchedulerPage() {
 
   // ===== Region-filtered entries — STRICT (use entry.region column directly) =====
   const monthEntries = entries.filter((e) => e.date.startsWith(selectedMonth));
-  const filteredEntries = monthEntries.filter((e) => e.region === selectedRegion);
-  const regionActiveEmps = employees.filter((e) => e.active && e.region === selectedRegion && e.teamType === "helpdesk");
+  const filteredEntries = selectedRegion === "all" ? monthEntries : monthEntries.filter((e) => e.region === selectedRegion);
+  const regionActiveEmps = employees.filter((e) => e.active && (selectedRegion === "all" || e.region === selectedRegion) && e.teamType === "helpdesk");
 
   // Connection team employees: must have teamType = "connection"
   const connectionTeamEmps = employees.filter((e) => e.active && e.teamType === "connection");
@@ -1690,7 +1737,7 @@ export default function ShiftSchedulerPage() {
   const totalHolidays = filteredEntries.filter((e) => e.isHoliday).length;
   const totalWeeks = weekGroups.length;
 
-  const roleColor = user?.role === "admin" ? "bg-red-500" : user?.role === "editor" ? "bg-amber-500" : "bg-slate-500";
+  const roleColor = user?.role === "super_admin" ? "bg-purple-700" : user?.role === "admin" ? "bg-red-500" : user?.role === "editor" ? "bg-amber-500" : "bg-slate-500";
 
   // ===== Build week options for dialogs =====
   const buildWeekOptions = () => {
@@ -1744,7 +1791,7 @@ export default function ShiftSchedulerPage() {
     <TooltipProvider>
       <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950">
         {/* HEADER */}
-        <header className="bg-[#0F172A] text-white sticky top-0 z-50 shadow-lg">
+        <header className="bg-[#0F172A]/95 backdrop-blur-md text-white sticky top-0 z-50 shadow-lg border-b border-slate-700/50">
           <div className="max-w-7xl mx-auto px-4 py-3">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-3">
@@ -1757,6 +1804,10 @@ export default function ShiftSchedulerPage() {
                     <CheckCircle className="h-3 w-3 mr-1" />{balance.variance.toFixed(1)}h variance
                   </Badge>
                 )}
+                <div className="hidden md:flex items-center gap-2 ml-2">
+                  <Badge variant="outline" className="border-slate-600 text-slate-300 bg-slate-800/50 text-[10px] px-2"><Calendar className="h-3 w-3 mr-1" />{generatedMonths.length} months</Badge>
+                  <Badge variant="outline" className="border-slate-600 text-slate-300 bg-slate-800/50 text-[10px] px-2"><Users className="h-3 w-3 mr-1" />{employees.length} staff</Badge>
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 <Select value={selectedMonth} onValueChange={(v) => { const [y, m] = v.split("-"); setSelectedMonth(v); setSelectedYear(Number(y)); }}>
@@ -1836,11 +1887,11 @@ export default function ShiftSchedulerPage() {
             <div className="flex flex-wrap gap-2 items-center">
               {activeTab === "helpdesk" && canEdit && (
                 <>
-                  <Button onClick={generateMonth} disabled={generating} className="bg-blue-600 hover:bg-blue-700 text-white"><Sparkles className="h-4 w-4 mr-1.5" />{generating ? "Generating..." : "Generate Month"}</Button>
+                  <Button onClick={generateMonth} disabled={generating || selectedRegion === "all"} className="bg-blue-600 hover:bg-blue-700 text-white"><Sparkles className="h-4 w-4 mr-1.5" />{generating ? "Generating..." : "Generate Month"}<kbd className="ml-1.5 text-[10px] bg-blue-800/50 px-1.5 py-0.5 rounded border border-blue-500/30 font-mono">G</kbd></Button>
                   <Button onClick={generateWeek} disabled={generating} variant="outline" className="border-blue-300 text-blue-700 hover:bg-blue-50"><Calendar className="h-4 w-4 mr-1.5" />This Week</Button>
                   <Button onClick={() => { setAddShiftDate(""); setAddShiftEmp(""); setShowAddShift(true); }} variant="outline"><Plus className="h-4 w-4 mr-1.5" />Add Shift</Button>
                   <Button onClick={() => { setSwapMode(!swapMode); setSwapFirst(null); }} variant={swapMode ? "default" : "outline"} className={swapMode ? "bg-purple-600 text-white" : "border-purple-300 text-purple-700"}><ArrowLeftRight className="h-4 w-4 mr-1.5" />{swapMode ? "Cancel Swap" : "Swap Mode"}</Button>
-                  <Button onClick={() => { setExportType("helpdesk"); setExportSelectedIds([]); setExportDateFrom(""); setExportDateTo(""); setExportRegion(selectedRegion); setShowExport(true); }} disabled={filteredEntries.length === 0} variant="outline" className="border-emerald-300 text-emerald-700"><FileSpreadsheet className="h-4 w-4 mr-1.5" />Export Excel</Button>
+                  <Button onClick={() => { setExportType("helpdesk"); setExportSelectedIds([]); setExportDateFrom(""); setExportDateTo(""); setExportRegions(selectedRegion === "all" ? ["cairo", "delta", "upper_egypt"] : [selectedRegion]); setShowExport(true); }} disabled={filteredEntries.length === 0} variant="outline" className="border-emerald-300 text-emerald-700"><FileSpreadsheet className="h-4 w-4 mr-1.5" />Export Excel<kbd className="ml-1.5 text-[10px] bg-emerald-100 dark:bg-emerald-900/30 px-1.5 py-0.5 rounded border border-emerald-300 dark:border-emerald-700 font-mono text-emerald-600 dark:text-emerald-400">E</kbd></Button>
                 </>
               )}
               {activeTab === "helpdesk" && canAdmin && (
@@ -1848,10 +1899,10 @@ export default function ShiftSchedulerPage() {
               )}
               {activeTab === "helpdesk" && (
               <div className="ml-auto">
-                <Select value={selectedRegion} onValueChange={setSelectedRegion} disabled={user?.role !== "admin" && user?.region !== "all"}>
+                <Select value={selectedRegion} onValueChange={setSelectedRegion} disabled={user?.role !== "admin" && user?.role !== "super_admin" && user?.region !== "all"}>
                   <SelectTrigger className="w-[180px] h-9 text-xs"><MapPin className="h-3.5 w-3.5 mr-1" /><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {Object.entries(REGIONS).filter(([k]) => k !== "all").map(([key, label]) => (
+                    {Object.entries(REGIONS).map(([key, label]) => (
                       <SelectItem key={key} value={key}>{label}</SelectItem>
                     ))}
                   </SelectContent>
@@ -1869,7 +1920,7 @@ export default function ShiftSchedulerPage() {
               variant={activeTab === "helpdesk" ? "default" : "ghost"}
               size="sm"
               onClick={() => setActiveTab("helpdesk")}
-              className={activeTab === "helpdesk" ? "bg-blue-600 text-white shadow-sm" : "text-slate-600 dark:text-slate-400"}
+              className={activeTab === "helpdesk" ? "bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-sm" : "text-slate-600 dark:text-slate-400 transition-all duration-200 hover:shadow-sm"}
             >
               <HeadphonesIcon className="h-4 w-4 mr-2" />Helpdesk Schedule
             </Button>
@@ -1877,7 +1928,7 @@ export default function ShiftSchedulerPage() {
               variant={activeTab === "connection" ? "default" : "ghost"}
               size="sm"
               onClick={() => setActiveTab("connection")}
-              className={activeTab === "connection" ? "bg-teal-600 text-white shadow-sm" : "text-slate-600 dark:text-slate-400"}
+              className={activeTab === "connection" ? "bg-gradient-to-r from-teal-600 to-teal-700 text-white shadow-sm" : "text-slate-600 dark:text-slate-400 transition-all duration-200 hover:shadow-sm"}
             >
               <Link2 className="h-4 w-4 mr-2" />Connection Team
             </Button>
@@ -1888,10 +1939,10 @@ export default function ShiftSchedulerPage() {
         {activeTab === "helpdesk" && (
         <div className="max-w-7xl mx-auto w-full px-4 mt-4">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <Card className="shadow-sm"><CardContent className="p-4 text-center"><div className="text-2xl font-bold text-slate-800 dark:text-slate-100">{totalWeeks}</div><div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Weeks</div></CardContent></Card>
-            <Card className="shadow-sm"><CardContent className="p-4 text-center"><div className="text-2xl font-bold text-slate-800 dark:text-slate-100">{totalDays}</div><div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Work Days</div></CardContent></Card>
-            <Card className="shadow-sm"><CardContent className="p-4 text-center"><div className="text-2xl font-bold text-amber-600">{totalHolidays}</div><div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Holidays</div></CardContent></Card>
-            <Card className="shadow-sm"><CardContent className="p-4 text-center"><div className="text-2xl font-bold text-blue-600">{totalHours.toFixed(1)}h</div><div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Total Hours</div></CardContent></Card>
+            <Card className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-950/40 dark:to-indigo-950/40 border-blue-200 dark:border-blue-800 shadow-sm hover:shadow-md transition-shadow"><CardContent className="p-4 text-center"><div className="text-2xl font-bold text-blue-700 dark:text-blue-300">{totalWeeks}</div><div className="text-xs text-blue-600 dark:text-blue-400 mt-0.5">Weeks</div></CardContent></Card>
+            <Card className="bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/40 dark:to-teal-950/40 border-emerald-200 dark:border-emerald-800 shadow-sm hover:shadow-md transition-shadow"><CardContent className="p-4 text-center"><div className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">{totalDays}</div><div className="text-xs text-emerald-600 dark:text-emerald-400 mt-0.5">Work Days</div></CardContent></Card>
+            <Card className="bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/40 dark:to-orange-950/40 border-amber-200 dark:border-amber-800 shadow-sm hover:shadow-md transition-shadow"><CardContent className="p-4 text-center"><div className="text-2xl font-bold text-amber-700 dark:text-amber-300">{totalHolidays}</div><div className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">Holidays</div></CardContent></Card>
+            <Card className="bg-gradient-to-br from-rose-50 to-pink-50 dark:from-rose-950/40 dark:to-pink-950/40 border-rose-200 dark:border-rose-800 shadow-sm hover:shadow-md transition-shadow"><CardContent className="p-4 text-center"><div className="text-2xl font-bold text-rose-700 dark:text-rose-300">{totalHours.toFixed(1)}h</div><div className="text-xs text-rose-600 dark:text-rose-400 mt-0.5">Total Hours</div></CardContent></Card>
           </div>
           {/* Holiday Deduction Display */}
           {holidayDeductionHours > 0 && (
@@ -1904,6 +1955,62 @@ export default function ShiftSchedulerPage() {
               </div>
             </div>
           )}
+        </div>
+        )}
+
+        {/* SCHEDULE STATISTICS DASHBOARD */}
+        {activeTab === "helpdesk" && entries.length > 0 && (
+        <div className="max-w-7xl mx-auto w-full px-4 mt-4 mb-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Card className="bg-gradient-to-br from-emerald-50 to-green-50 dark:from-emerald-950/40 dark:to-green-950/40 border-emerald-200 dark:border-emerald-800 p-4 shadow-sm hover:shadow-md transition-shadow">
+              <div className="flex items-center gap-2 mb-1"><TrendingUp className="h-4 w-4 text-emerald-600 dark:text-emerald-400" /><span className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">Total Hours</span></div>
+              <div className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">
+                {entries.reduce((sum: number, e: any) => sum + (e.isHoliday ? 0 : e.hours), 0).toFixed(1)}
+              </div>
+            </Card>
+            <Card className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-950/40 dark:to-indigo-950/40 border-blue-200 dark:border-blue-800 p-4 shadow-sm hover:shadow-md transition-shadow">
+              <div className="flex items-center gap-2 mb-1"><CalendarDays className="h-4 w-4 text-blue-600 dark:text-blue-400" /><span className="text-xs text-blue-600 dark:text-blue-400 font-medium">Work Days</span></div>
+              <div className="text-2xl font-bold text-blue-700 dark:text-blue-300">
+                {entries.filter((e: any) => !e.isHoliday && e.hours > 0).length}
+              </div>
+            </Card>
+            <Card className="bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/40 dark:to-orange-950/40 border-amber-200 dark:border-amber-800 p-4 shadow-sm hover:shadow-md transition-shadow">
+              <div className="flex items-center gap-2 mb-1"><Users className="h-4 w-4 text-amber-600 dark:text-amber-400" /><span className="text-xs text-amber-600 dark:text-amber-400 font-medium">Avg Hours/Person</span></div>
+              <div className="text-2xl font-bold text-amber-700 dark:text-amber-300">
+                {(() => {
+                  const totalH = entries.reduce((s: number, e: any) => s + (e.isHoliday ? 0 : e.hours), 0);
+                  const emps = new Set(entries.filter((e: any) => e.hours > 0).map((e: any) => e.empName));
+                  return emps.size > 0 ? (totalH / emps.size).toFixed(1) : "0";
+                })()}
+              </div>
+            </Card>
+            <Card className="bg-gradient-to-br from-rose-50 to-pink-50 dark:from-rose-950/40 dark:to-pink-950/40 border-rose-200 dark:border-rose-800 p-4 shadow-sm hover:shadow-md transition-shadow">
+              <div className="flex items-center gap-2 mb-1"><Sun className="h-4 w-4 text-rose-600 dark:text-rose-400" /><span className="text-xs text-rose-600 dark:text-rose-400 font-medium">Holidays</span></div>
+              <div className="text-2xl font-bold text-rose-700 dark:text-rose-300">
+                {entries.filter((e: any) => e.isHoliday).length}
+              </div>
+            </Card>
+          </div>
+        </div>
+        )}
+
+        {/* ACTIVITY FEED */}
+        {recentActivity.length > 0 && (
+        <div className="max-w-7xl mx-auto w-full px-4 mt-4 mb-4">
+          <Card className="shadow-sm border-slate-200 dark:border-slate-800">
+            <div className="flex items-center gap-2 px-4 py-2 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50">
+              <Activity className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+              <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">Recent Activity</span>
+            </div>
+            <div className="p-3 space-y-1.5">
+              {recentActivity.map((item, idx) => (
+                <div key={idx} className="flex items-center justify-between text-xs">
+                  <span className="text-slate-600 dark:text-slate-300">{item.action}</span>
+                  <span className="text-slate-400 text-[10px] ml-2 whitespace-nowrap">{item.time}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
         </div>
         )}
 
@@ -1967,7 +2074,7 @@ export default function ShiftSchedulerPage() {
                   </tr></thead>
                   <tbody>
                     {regionRotations.map((rr) => (
-                      <tr key={rr.id} className="border-b border-slate-100 dark:border-slate-800">
+                      <tr key={rr.id} className={`border-b border-slate-100 dark:border-slate-800 hover:bg-emerald-50/80 dark:hover:bg-emerald-950/20 transition-colors ${rr.id % 2 === 0 ? "bg-slate-50/50 dark:bg-slate-900/30" : ""}`}>
                         <td className="px-3 py-2 text-xs font-medium text-slate-700 dark:text-slate-200"><Badge variant="outline" className="text-orange-700 border-orange-300 bg-orange-50 dark:bg-orange-950/20 text-xs">{REGIONS[rr.region] || rr.region}</Badge></td>
                         <td className="px-3 py-2 text-sm text-slate-700 dark:text-slate-200">{rr.targetArea}</td>
                         <td className="px-3 py-2 text-xs text-slate-500">{formatDateDisplay(rr.weekStart)} → {formatDateDisplay(rr.weekEnd)}</td>
@@ -2015,7 +2122,7 @@ export default function ShiftSchedulerPage() {
                         const weeksCount = empTeamEntries.length;
                         const avgHrs = weeksCount > 0 ? totalHrs / weeksCount : 0;
                         return (
-                          <tr key={emp.id} className="border-b border-slate-100 dark:border-slate-800">
+                          <tr key={emp.id} className={`border-b border-slate-100 dark:border-slate-800 hover:bg-emerald-50/80 dark:hover:bg-emerald-950/20 transition-colors ${idx % 2 === 1 ? "bg-slate-50/50 dark:bg-slate-900/30" : ""}`}>
                             <td className="px-3 py-2 text-slate-400 text-xs">{idx + 1}</td>
                             <td className="px-3 py-2 font-medium text-sm">{emp.name}</td>
                             <td className="px-3 py-2 text-center text-xs">{weeksCount}</td>
@@ -2070,7 +2177,7 @@ export default function ShiftSchedulerPage() {
                   </tr></thead>
                   <tbody>
                     {connectionTeam.map((ct) => (
-                      <tr key={ct.id} className="border-b border-slate-100 dark:border-slate-800 hover:bg-teal-50/50 dark:hover:bg-teal-950/20 transition-colors">
+                      <tr key={ct.id} className={`border-b border-slate-100 dark:border-slate-800 hover:bg-teal-50/50 dark:hover:bg-teal-950/20 transition-colors ${ct.id % 2 === 0 ? "bg-slate-50/50 dark:bg-slate-900/30" : ""}`}>
                         <td className="px-3 py-2 font-medium text-slate-700 dark:text-slate-200">{ct.empName}</td>
                         <td className="px-3 py-2 text-xs text-slate-500">{ct.empHrid}</td>
                         <td className="px-3 py-2 text-xs text-slate-500">{formatDateDisplay(ct.weekStart)}</td>
@@ -2140,7 +2247,7 @@ export default function ShiftSchedulerPage() {
                   ) : filteredConnectionAssignments.map((a) => {
                     const emp = employees.find(e => e.id === a.employeeId);
                     return (
-                      <tr key={a.id} className="border-b border-slate-100 dark:border-slate-800">
+                      <tr key={a.id} className={`border-b border-slate-100 dark:border-slate-800 hover:bg-emerald-50/80 dark:hover:bg-emerald-950/20 transition-colors ${a.id % 2 === 0 ? "bg-slate-50/50 dark:bg-slate-900/30" : ""}`}>
                         <td className="px-3 py-2 text-xs font-medium text-slate-700 dark:text-slate-200">{emp?.name || `#${a.employeeId}`}</td>
                         <td className="px-3 py-2 text-xs text-slate-500">{formatDateDisplay(a.date)}</td>
                         <td className="px-3 py-2 text-xs text-slate-500">{a.weekStart ? formatDateDisplay(a.weekStart) : "-"}</td>
@@ -2164,11 +2271,13 @@ export default function ShiftSchedulerPage() {
           {dataLoading ? (
             <div className="flex items-center justify-center py-20"><div className="flex flex-col items-center gap-3"><RefreshCw className="h-8 w-8 text-slate-400 animate-spin" /><span className="text-slate-500 text-sm">Loading schedule...</span></div></div>
           ) : filteredEntries.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 text-center">
-              <CalendarDays className="h-16 w-16 text-slate-300 dark:text-slate-600 mb-4" />
+            <div className="flex flex-col items-center justify-center py-24 text-center">
+              <div className="w-24 h-24 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center mb-6">
+                <CalendarDays className="h-12 w-12 text-slate-300 dark:text-slate-600" />
+              </div>
               <h2 className="text-xl font-semibold text-slate-600 dark:text-slate-300 mb-2">No Schedule Generated</h2>
-              <p className="text-slate-400 dark:text-slate-500 mb-6 max-w-md">Click &quot;Generate Month&quot; to create a balanced shift schedule for {MONTHS[Number(selectedMonth.split("-")[1]) - 1]} {selectedYear}</p>
-              {canEdit && <Button onClick={generateMonth} disabled={generating} className="bg-blue-600 hover:bg-blue-700 text-white"><Sparkles className="h-4 w-4 mr-1.5" />Generate Schedule</Button>}
+              <p className="text-slate-400 dark:text-slate-500 mb-8 max-w-md leading-relaxed">Click &quot;Generate Month&quot; to create a balanced shift schedule for {MONTHS[Number(selectedMonth.split("-")[1]) - 1]} {selectedYear}</p>
+              {canEdit && <Button onClick={generateMonth} disabled={generating || selectedRegion === "all"} className="bg-blue-600 hover:bg-blue-700 text-white shadow-md hover:shadow-lg transition-shadow"><Sparkles className="h-4 w-4 mr-1.5" />Generate Schedule</Button>}
             </div>
           ) : (
             <div className="space-y-3">
@@ -2178,7 +2287,7 @@ export default function ShiftSchedulerPage() {
                 const connPerson = connectionByWeek.get(week.key);
                 return (
                   <Card key={week.key} className="shadow-sm overflow-hidden">
-                    <div className="bg-gradient-to-r from-[#1B2A4A] to-[#1D4ED8] text-white px-4 py-2.5 cursor-pointer flex items-center justify-between" onClick={() => { const next = new Set(collapsedWeeks); if (isCollapsed) next.delete(week.key); else next.add(week.key); setCollapsedWeeks(next); }}>
+                    <div className="bg-gradient-to-r from-[#0F2847] to-[#1E50D8] text-white px-4 py-2.5 cursor-pointer flex items-center justify-between" onClick={() => { const next = new Set(collapsedWeeks); if (isCollapsed) next.delete(week.key); else next.add(week.key); setCollapsedWeeks(next); }}>
                       <div className="flex items-center gap-3 flex-wrap">{isCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}<span className="font-semibold text-sm">{week.label}</span></div>
                       <div className="flex items-center gap-2 flex-wrap">
                         {connPerson && (() => {
@@ -2299,7 +2408,7 @@ export default function ShiftSchedulerPage() {
             <DialogHeader><DialogTitle className="flex items-center gap-2"><Settings className="h-5 w-5" /> Shift Settings</DialogTitle><DialogDescription>Configure shift times, holidays, and scheduling rules</DialogDescription></DialogHeader>
             {editSettings && (
               <div className="space-y-5 mt-2">
-                <div className="space-y-3"><h3 className="font-semibold text-sm text-slate-700 dark:text-slate-200">Shift Times</h3>
+                <div className="space-y-3"><h3 className="font-semibold text-sm text-slate-700 dark:text-slate-200 flex items-center gap-1.5"><Clock className="h-4 w-4 text-emerald-500" />Shift Times</h3>
                   {Object.entries(editSettings.shifts).map(([key, shift]) => (
                     <div key={key} className="grid grid-cols-3 gap-2 items-center">
                       <Label className="text-xs font-medium text-slate-600 dark:text-slate-300">{key === "Weekday" ? "Weekday (Sun-Wed)" : key === "Holiday" ? "Holiday (Official Off)" : key}</Label>
@@ -2463,14 +2572,33 @@ export default function ShiftSchedulerPage() {
                 </div>
               )}
               <Separator />
-              <div className="space-y-2">{employees.map((emp, idx) => (
-                <div key={emp.id} className={`flex items-center justify-between p-2 rounded-lg border ${emp.active ? "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900" : "border-red-200 dark:border-red-900 bg-red-50/50 dark:bg-red-950/20 opacity-60"}`}>
+              {/* Search Bar */}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                <Input value={empSearchQuery} onChange={(e) => setEmpSearchQuery(e.target.value)} placeholder="Search by name or HRID..." className="h-9 text-sm pl-9" />
+              </div>
+              {/* Region Summary Bar */}
+              <div className="flex gap-2 flex-wrap mb-2">
+                {["cairo", "delta", "upper_egypt"].map(r => {
+                  const count = employees.filter((e: any) => e.region === r).length;
+                  return (
+                    <Badge key={r} variant="outline" className="px-2.5 py-1 text-xs border-slate-300 dark:border-slate-600">
+                      {r.replace("_", " ").replace(/\b\w/g, (l: string) => l.toUpperCase())}: <span className="font-bold">{count}</span>
+                    </Badge>
+                  );
+                })}
+                <Badge variant="outline" className="px-2.5 py-1 text-xs border-purple-300 text-purple-700 dark:text-purple-300 dark:border-purple-700">
+                  Total: <span className="font-bold">{employees.length}</span>
+                </Badge>
+              </div>
+              <div className="space-y-2">{employees.filter((emp: any) => empSearchQuery === "" || emp.name.toLowerCase().includes(empSearchQuery.toLowerCase()) || emp.hrid.toLowerCase().includes(empSearchQuery.toLowerCase())).map((emp, idx) => (
+                <div key={emp.id} className={`flex items-center justify-between p-2.5 rounded-lg border transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${emp.active ? "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900" : "border-red-200 dark:border-red-900 bg-red-50/50 dark:bg-red-950/20 opacity-60"}`}>
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-sm">{emp.name}</span>
                     <span className="text-xs text-slate-400">({emp.hrid})</span>
                     {emp.teamType && (
-                      <Badge variant={emp.teamType === "connection" ? "default" : "secondary"} className="text-[10px] ml-2">
-                        {emp.teamType === "connection" ? "Connection" : "Helpdesk"}
+                      <Badge variant={emp.teamType === "both" ? "default" : "outline"} className={`text-[10px] ml-2 ${emp.teamType === "connection" ? "bg-teal-100 text-teal-700 border-teal-300 dark:bg-teal-900/30 dark:text-teal-300 dark:border-teal-700" : emp.teamType === "both" ? "bg-purple-100 text-purple-700 border-purple-300 dark:bg-purple-900/30 dark:text-purple-300 dark:border-purple-700" : "bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-700"}`}>
+                        {emp.teamType === "connection" ? "Connection" : emp.teamType === "both" ? "Both" : "Helpdesk"}
                       </Badge>
                     )}
                   </div>
@@ -2532,20 +2660,26 @@ export default function ShiftSchedulerPage() {
                 size="sm" 
                 variant={exportType === "helpdesk" ? "default" : "outline"}
                 onClick={() => setExportType("helpdesk")}
-                className={exportType === "helpdesk" ? "bg-emerald-600 text-white" : ""}
+                className={exportType === "helpdesk" ? "bg-emerald-600 text-white shadow-inner" : ""}
               >Helpdesk</Button>
               <Button 
                 size="sm" 
                 variant={exportType === "connection" ? "default" : "outline"}
                 onClick={() => setExportType("connection")}
-                className={exportType === "connection" ? "bg-teal-600 text-white" : ""}
+                className={exportType === "connection" ? "bg-teal-600 text-white shadow-inner" : ""}
               >Connection Team</Button>
               <Button 
                 size="sm" 
                 variant={exportType === "hrid" ? "default" : "outline"}
                 onClick={() => setExportType("hrid")}
-                className={exportType === "hrid" ? "bg-violet-600 text-white" : ""}
+                className={exportType === "hrid" ? "bg-violet-600 text-white shadow-inner" : ""}
               >Search by HRID</Button>
+              <Button 
+                size="sm" 
+                variant={exportType === "matrix" ? "default" : "outline"}
+                onClick={() => setExportType("matrix")}
+                className={exportType === "matrix" ? "bg-orange-600 text-white shadow-inner" : ""}
+              >📊 Matrix View</Button>
             </div>
 
             {/* ===== HELPDESK CONTENT ===== */}
@@ -2564,18 +2698,17 @@ export default function ShiftSchedulerPage() {
                 
                 <Separator />
                 
-                <div>
-                  <Label className="text-xs font-medium">Select Region</Label>
-                  <Select value={exportRegion} onValueChange={setExportRegion}>
-                    <SelectTrigger className="mt-1 h-8 text-xs"><MapPin className="h-3.5 w-3.5 mr-1" /><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Regions</SelectItem>
-                      <SelectItem value="cairo">Cairo</SelectItem>
-                      <SelectItem value="delta">Delta</SelectItem>
-                      <SelectItem value="upper_egypt">Upper Egypt</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-[10px] text-slate-400 mt-1">Export Helpdesk schedule for the selected region</p>
+                <div className="border border-slate-200 dark:border-slate-700 rounded-lg p-3">
+                  <Label className="text-xs font-medium"><MapPin className="h-3.5 w-3.5 inline mr-1" />Select Regions</Label>
+                  <div className="mt-2 flex flex-wrap gap-3">
+                    {Object.entries(REGIONS).filter(([k]) => k !== "all").map(([key, label]) => (
+                      <label key={key} className="flex items-center gap-2 cursor-pointer px-3 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                        <Checkbox checked={exportRegions.includes(key)} onCheckedChange={() => toggleExportRegion(key)} />
+                        <span className="text-sm">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1">Check the regions you want to export</p>
                 </div>
                 
                 <Separator />
@@ -2583,11 +2716,11 @@ export default function ShiftSchedulerPage() {
                 <div>
                   <Label className="text-xs font-medium">Select Employees</Label>
                   <div className="mt-2 flex gap-2 mb-2">
-                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { const regionEmps = employees.filter(e => e.region === exportRegion); setExportSelectedIds(regionEmps.map((e) => e.id)); }}>Select All</Button>
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { const regionEmps = employees.filter(e => exportRegions.includes(e.region)); setExportSelectedIds(regionEmps.map((e) => e.id)); }}>Select All</Button>
                     <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setExportSelectedIds([])}>Deselect All</Button>
                   </div>
                   <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                    {employees.filter(e => e.region === exportRegion).map((emp) => (
+                    {employees.filter(e => exportRegions.includes(e.region)).map((emp) => (
                       <div key={emp.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-50 dark:hover:bg-slate-800">
                         <Checkbox checked={exportSelectedIds.includes(emp.id)} onCheckedChange={(checked) => { if (checked) setExportSelectedIds([...exportSelectedIds, emp.id]); else setExportSelectedIds(exportSelectedIds.filter((id) => id !== emp.id)); }} />
                         <span className="text-sm">{emp.name} <span className="text-xs text-slate-400">({emp.hrid})</span></span>
@@ -2666,12 +2799,73 @@ export default function ShiftSchedulerPage() {
               </div>
             )}
 
+            {/* ===== MATRIX VIEW CONTENT ===== */}
+            {exportType === "matrix" && (
+              <div className="space-y-4 mt-2">
+                <div className="p-4 bg-orange-50 dark:bg-orange-950 rounded-lg">
+                  <div className="flex items-start gap-2">
+                    <LayoutGrid className="h-5 w-5 text-orange-600 mt-0.5" />
+                    <div>
+                      <div className="text-sm font-medium text-orange-900 dark:text-orange-100">Matrix View Export</div>
+                      <div className="text-xs text-orange-700 dark:text-orange-300">Exports a professional matrix-style Excel with W/Off grid, conditional formatting, formulas, and smart recommendations</div>
+                    </div>
+                  </div>
+                </div>
+                
+                <Separator />
+                
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">📁 Includes:</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="flex items-center gap-2 text-xs p-2 bg-slate-50 dark:bg-slate-800 rounded"><FileSpreadsheet className="h-3.5 w-3.5 text-blue-500" /> Config sheet with dropdowns</div>
+                    <div className="flex items-center gap-2 text-xs p-2 bg-slate-50 dark:bg-slate-800 rounded"><LayoutGrid className="h-3.5 w-3.5 text-emerald-500" /> Matrix per region</div>
+                    <div className="flex items-center gap-2 text-xs p-2 bg-slate-50 dark:bg-slate-800 rounded"><Link2 className="h-3.5 w-3.5 text-teal-500" /> Connection Team sheet</div>
+                    <div className="flex items-center gap-2 text-xs p-2 bg-slate-50 dark:bg-slate-800 rounded"><BarChart3 className="h-3.5 w-3.5 text-amber-500" /> Summary with formulas</div>
+                  </div>
+                </div>
+
+                <Separator />
+
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">🎨 Features:</div>
+                  <div className="text-xs text-slate-500 dark:text-slate-400 space-y-1">
+                    <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-200 inline-block border border-red-300" /> Conditional formatting: consecutive work days highlighted in red</div>
+                    <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-200 inline-block border border-green-300" /> W (green) = Working, Off (red) = Weekly Off</div>
+                    <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-amber-200 inline-block border border-amber-300" /> Variance alerts: Max-Min &gt; 1 triggers warning</div>
+                    <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-blue-200 inline-block border border-blue-300" /> COUNTIF formulas, MAX/MIN statistics</div>
+                    <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-purple-200 inline-block border border-purple-300" /> Smart recommendations per team</div>
+                  </div>
+                </div>
+
+                <Separator />
+
+                <div className="border border-slate-200 dark:border-slate-700 rounded-lg p-3">
+                  <Label className="text-xs font-medium"><MapPin className="h-3.5 w-3.5 inline mr-1" />Select Regions</Label>
+                  <div className="mt-2 flex flex-wrap gap-3">
+                    {Object.entries(REGIONS).filter(([k]) => k !== "all").map(([key, label]) => (
+                      <label key={key} className="flex items-center gap-2 cursor-pointer px-3 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                        <Checkbox checked={exportRegions.includes(key)} onCheckedChange={() => toggleExportRegion(key)} />
+                        <span className="text-sm">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1">Check the regions you want to export</p>
+                </div>
+
+                <div className="p-3 bg-blue-50 dark:bg-blue-950 rounded-lg">
+                  <div className="text-xs text-blue-700 dark:text-blue-300">📅 Month: <span className="font-bold">{selectedMonth}</span> — {buildWeekOptions().length} weeks in this period</div>
+                </div>
+              </div>
+            )}
+
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowExport(false)}>Cancel</Button>
               {exportType === "hrid" ? (
                 <Button onClick={exportHridExcel} disabled={exporting || !exportHrid} className="bg-violet-600 hover:bg-violet-700 text-white">{exporting ? "Exporting..." : "Export Employee"}</Button>
               ) : exportType === "connection" ? (
                 <Button onClick={exportConnectionExcel} disabled={exporting} className="bg-teal-600 hover:bg-teal-700 text-white">{exporting ? "Exporting..." : "Export Connection Team"}</Button>
+              ) : exportType === "matrix" ? (
+                <Button onClick={exportMatrixExcel} disabled={exporting} className="bg-orange-600 hover:bg-orange-700 text-white">{exporting ? "Exporting..." : "📊 Export Matrix"}</Button>
               ) : (
                 <Button onClick={exportHelpdeskExcel} disabled={exporting} className="bg-emerald-600 hover:bg-emerald-700 text-white">{exporting ? "Exporting..." : "Export Helpdesk"}</Button>
               )}
@@ -2717,7 +2911,7 @@ export default function ShiftSchedulerPage() {
                         .filter((ct) => ct.empName === emp.name)
                         .reduce((sum, ct) => sum + calcConnectionWeekHours(ct.weekStart, ct.weekEnd), 0);
                       return (
-                        <tr key={emp.id} className="border-b border-slate-100 dark:border-slate-800">
+                        <tr key={emp.id} className={`border-b border-slate-100 dark:border-slate-800 hover:bg-emerald-50/80 dark:hover:bg-emerald-950/20 transition-colors ${idx % 2 === 1 ? "bg-slate-50/50 dark:bg-slate-900/30" : ""}`}>
                           <td className="px-3 py-2 text-slate-400 text-xs">{idx + 1}</td>
                           <td className="px-3 py-2 font-medium text-sm">{emp.name}</td>
                           <td className="px-3 py-2 text-center text-xs">{empEntries.length}</td>
@@ -2770,10 +2964,10 @@ export default function ShiftSchedulerPage() {
                 </tr></thead>
                 <tbody>
                   {users.map((u) => (
-                    <tr key={u.id} className="border-b border-slate-100 dark:border-slate-800">
+                    <tr key={u.id} className={`border-b border-slate-100 dark:border-slate-800 hover:bg-emerald-50/80 dark:hover:bg-emerald-950/20 transition-colors ${u.id % 2 === 0 ? "bg-slate-50/50 dark:bg-slate-900/30" : ""}`}>
                       <td className="px-3 py-2 font-medium text-sm">{u.username}{u.id === user?.id && <span className="ml-1 text-[10px] text-blue-500">(you)</span>}</td>
                       <td className="px-3 py-2 text-xs text-slate-500">{u.email || "-"}</td>
-                      <td className="px-3 py-2 text-center"><Badge className={`text-[10px] text-white border-0 ${u.role === "admin" ? "bg-red-500" : u.role === "editor" ? "bg-amber-500" : "bg-slate-500"}`}>{u.role}</Badge></td>
+                      <td className="px-3 py-2 text-center"><Badge className={`text-[10px] text-white border-0 ${u.role === "super_admin" ? "bg-purple-700" : u.role === "admin" ? "bg-red-500" : u.role === "editor" ? "bg-amber-500" : "bg-slate-500"}`}>{u.role}</Badge></td>
                       <td className="px-3 py-2 text-center"><span className="text-xs text-slate-600 dark:text-slate-300">{REGIONS[u.region] || u.region}</span></td>
                       <td className="px-3 py-2">
                         <div className="flex items-center justify-center gap-1">
@@ -3037,6 +3231,13 @@ export default function ShiftSchedulerPage() {
             <DialogFooter><Button variant="outline" onClick={() => setShowAddAssignment(false)}>Cancel</Button><Button onClick={addAssignment} disabled={!assignEmpId || !assignRegionCovered} className="bg-violet-600 hover:bg-violet-700 text-white">Assign</Button></DialogFooter>
           </DialogContent>
         </Dialog>
+        {/* FOOTER */}
+        <footer className="mt-auto">
+          <div className="h-px bg-gradient-to-r from-transparent via-slate-300 dark:via-slate-700 to-transparent" />
+          <div className="max-w-7xl mx-auto px-4 py-4 text-center">
+            <p className="text-xs text-slate-400 dark:text-slate-500">IT Helpdesk Shift Scheduler &copy; {new Date().getFullYear()} &mdash; Powered by Next.js</p>
+          </div>
+        </footer>
       </div>
     </TooltipProvider>
   );

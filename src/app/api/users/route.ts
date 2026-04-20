@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkAuth, unauthorizedResponse, forbiddenResponse, listUsers, createUser } from "@/lib/auth";
+import { checkAuth, unauthorizedResponse, forbiddenResponse, isAdmin, listUsers, createUser } from "@/lib/auth";
 
 // GET: List all users (ADMIN only)
 export async function GET(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
-  if (auth.role !== "admin") return forbiddenResponse();
+  if (!isAdmin(auth.role)) return forbiddenResponse();
 
   try {
     const users = await listUsers();
@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
-  if (auth.role !== "admin") return forbiddenResponse();
+  if (!isAdmin(auth.role)) return forbiddenResponse();
 
   try {
     const body = await request.json();

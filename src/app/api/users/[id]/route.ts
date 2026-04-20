@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkAuth, unauthorizedResponse, forbiddenResponse, updateUser, deleteUser } from "@/lib/auth";
+import { checkAuth, unauthorizedResponse, forbiddenResponse, isAdmin, updateUser, deleteUser } from "@/lib/auth";
 
 // PUT: Update user (ADMIN only)
 export async function PUT(
@@ -8,7 +8,7 @@ export async function PUT(
 ) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
-  if (auth.role !== "admin") return forbiddenResponse();
+  if (!isAdmin(auth.role)) return forbiddenResponse();
 
   try {
     const { id } = await params;
@@ -40,7 +40,7 @@ export async function DELETE(
 ) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
-  if (auth.role !== "admin") return forbiddenResponse();
+  if (!isAdmin(auth.role)) return forbiddenResponse();
 
   try {
     const { id } = await params;

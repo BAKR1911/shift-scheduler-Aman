@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkAuth, unauthorizedResponse, forbiddenResponse, resetUserPassword } from "@/lib/auth";
+import { checkAuth, unauthorizedResponse, forbiddenResponse, isAdmin, resetUserPassword } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
   try {
     const auth = checkAuth(request);
     if (!auth) return unauthorizedResponse();
-    if (auth.role !== "admin") return forbiddenResponse();
+    if (!isAdmin(auth.role)) return forbiddenResponse();
 
     const body = await request.json();
     const { userId, newPassword } = body;

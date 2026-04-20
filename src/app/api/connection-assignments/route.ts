@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkAuth, unauthorizedResponse } from "@/lib/auth";
+import { checkAuth, unauthorizedResponse, isAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 
 // GET: Fetch connection assignments and optional totals (NO region filtering for non-admin)
@@ -64,7 +64,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
-  if (auth.role !== "admin" && auth.role !== "editor") {
+  if (!isAdmin(auth.role) && auth.role !== "editor") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
-  if (auth.role !== "admin" && auth.role !== "editor") {
+  if (!isAdmin(auth.role) && auth.role !== "editor") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -126,7 +126,7 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
-  if (auth.role !== "admin") {
+  if (!isAdmin(auth.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

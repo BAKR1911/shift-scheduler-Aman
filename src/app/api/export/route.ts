@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkAuth, unauthorizedResponse, forbiddenResponse } from "@/lib/auth";
+import { checkAuth, unauthorizedResponse, forbiddenResponse, isAdmin } from "@/lib/auth";
 import { computeLocalStats, computeOffWeeks, getHoursForDate } from "@/lib/scheduler";
 import type { Employee, Settings, ScheduleEntry } from "@/lib/scheduler";
 import { db } from "@/lib/db";
@@ -15,23 +15,27 @@ const LIGHT_TEAL = "CCFBF1";
 export async function POST(request: NextRequest) {
   const auth = checkAuth(request);
   if (!auth) return unauthorizedResponse();
-  if (auth.role !== "admin" && auth.role !== "editor") return forbiddenResponse();
+  if (!isAdmin(auth.role) && auth.role !== "editor") return forbiddenResponse();
 
   try {
     const body = await request.json();
-    const { month, selectedEmployeeIds, dateFrom, dateTo, region } = body;
+    const { month, selectedEmployeeIds, dateFrom, dateTo, regions } = body;
 
-    // Determine effective region
-    let effectiveRegion = region || "all";
+    // Parse regions array from checkboxes
+    let regionList: string[] = Array.isArray(regions) && regions.length > 0
+      ? regions
+      : ["cairo", "delta", "upper_egypt"];
+
+    // If user has a specific region permission, restrict to that region
     if (auth.region && auth.region !== "all") {
-      effectiveRegion = auth.region;
+      regionList = [auth.region];
     }
 
     // Fetch data from store
     const dbEmployees = await db.employee.findMany({ orderBy: { order: "asc" } });
     const dbSettings = await db.settings.findUnique();
-    const genMonths = effectiveRegion !== "all"
-      ? await db.generatedMonth.findMany({ where: { region: effectiveRegion }, orderBy: { monthKey: "asc" } })
+    const genMonths = regionList.length < 3
+      ? await db.generatedMonth.findMany({ where: { region: { in: regionList } }, orderBy: { monthKey: "asc" } })
       : await db.generatedMonth.findMany({ orderBy: { monthKey: "asc" } });
 
     // Filter employees by region
@@ -42,10 +46,10 @@ export async function POST(request: NextRequest) {
       active: e.active,
     }));
 
-    if (effectiveRegion !== "all") {
+    if (regionList.length < 3) {
       employees = employees.filter((e) => {
         const dbEmp = dbEmployees.find(de => de.id === e.id);
-        return dbEmp && dbEmp.region === effectiveRegion;
+        return dbEmp && regionList.includes(dbEmp.region);
       });
     }
 
@@ -103,7 +107,7 @@ export async function POST(request: NextRequest) {
     if (dateFrom && dateTo) whereClause.date = { gte: dateFrom, lte: dateTo };
     if (dateFrom && !dateTo) whereClause.date = { gte: dateFrom };
     if (!dateFrom && dateTo) whereClause.date = { lte: dateTo };
-    if (effectiveRegion !== "all") whereClause.region = effectiveRegion;
+    if (regionList.length < 3) whereClause.region = { in: regionList };
 
     const dbEntries = await db.scheduleEntry.findMany({
       where: whereClause,
@@ -144,7 +148,7 @@ export async function POST(request: NextRequest) {
     const offWeeksMap = computeOffWeeks(entriesList, n);
 
     let period = "All Months";
-    const regionLabel = effectiveRegion !== "all" ? ` [${effectiveRegion}]` : "";
+    const regionLabel = regionList.length < 3 ? ` [${regionList.join(", ")}]` : "";
     if (month) {
       const [y, m] = month.split("-");
       period = `${MONTH_NAMES[Number(m)]} ${y}${regionLabel}`;
@@ -506,7 +510,7 @@ export async function POST(request: NextRequest) {
     [5, 24, 12, 14, 14, 14, 14, 14].forEach((w, i) => ws4.getColumn(i + 1).width = w);
 
     ws4.mergeCells("A1:H1");
-    ws4.getCell("A1").value = `IT Helpdesk - Cumulative Balance${regionLabel ? ` (${effectiveRegion})` : " (All Months)"}`;
+    ws4.getCell("A1").value = `IT Helpdesk - Cumulative Balance${regionLabel ? ` (${regionList.join(", ")})` : " (All Months)"}`;
     ws4.getCell("A1").font = { size: 16, bold: true, color: { argb: PRIMARY } };
     ws4.getRow(1).height = 36;
 
@@ -564,7 +568,7 @@ export async function POST(request: NextRequest) {
 
     const buffer = await wb.xlsx.writeBuffer();
 
-    const regionSuffix = effectiveRegion !== "all" ? `_${effectiveRegion}` : "";
+    const regionSuffix = regionList.length < 3 ? `_${regionList.join("_")}` : "";
     return new NextResponse(buffer, {
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
