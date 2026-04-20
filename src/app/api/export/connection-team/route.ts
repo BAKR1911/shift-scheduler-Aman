@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
     console.log("[Export Connection Team] Request:", { monthKey, monthFrom, monthTo });
 
     // Fetch settings to calculate actual hours per day
-    const dbSettings = await db.settings.findFirst();
+    const dbSettings = await db.settings.findUnique();
     const settings = dbSettings ? {
       shifts: JSON.parse(dbSettings.shifts || "{}"),
       weekStart: dbSettings.weekStart || "Friday",

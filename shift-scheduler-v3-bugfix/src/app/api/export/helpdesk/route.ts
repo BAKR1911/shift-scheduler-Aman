@@ -339,7 +339,7 @@ export async function POST(request: NextRequest) {
     const connectionEntries = monthKey ? await db.connectionTeam.findMany({ where: { monthKey } }) : await db.connectionTeam.findMany();
 
     // Fetch settings to calculate actual connection team hours
-    const dbSettings = await db.settings.findFirst();
+    const dbSettings = await db.settings.findUnique();
     const connSettings = dbSettings ? {
       shifts: JSON.parse(dbSettings.shifts || "{}"),
       weekStart: dbSettings.weekStart || "Friday",
