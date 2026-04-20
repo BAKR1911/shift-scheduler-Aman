@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, unauthorizedResponse, forbiddenResponse, isAdmin } from "@/lib/auth";
-import { generateScheduleForMonth, generateScheduleForWeek, computeLocalStats, computeOffWeeks } from "@/lib/scheduler";
+import { generateScheduleForMonth, generateScheduleForWeek, computeLocalStats, computeOffWeeks, getHoursForDate } from "@/lib/scheduler";
 import type { Employee, Settings, ScheduleEntry, CumulativeStats } from "@/lib/scheduler";
 import { db } from "@/lib/db";
 
@@ -66,8 +66,10 @@ export async function GET(request: NextRequest) {
       else if (jsDay === 5) dayType = "Friday";
       else if (jsDay === 4) dayType = "Thursday";
 
-      // For holidays, use 0 hours (not working)
-      const hours = isHolidayDynamic ? 0 : e.hours;
+      // For holidays, check holidayHours first
+      const hours = isHolidayDynamic
+        ? (getHoursForDate(e.date, settings, true) || 0)
+        : e.hours;
 
       return {
         date: e.date,

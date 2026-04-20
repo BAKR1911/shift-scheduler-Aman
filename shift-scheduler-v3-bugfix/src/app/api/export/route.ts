@@ -67,6 +67,7 @@ export async function POST(request: NextRequest) {
       summerTime: !!dbSettings?.summerTime,
       summerShifts: dbSettings ? JSON.parse(dbSettings.summerShifts) : {},
       dayHours: dbSettings ? JSON.parse(dbSettings.dayHours || "{}") : {},
+      holidayHours: dbSettings ? JSON.parse(dbSettings.holidayHours || "{}") : {},
     };
 
     // Fetch connection team entries

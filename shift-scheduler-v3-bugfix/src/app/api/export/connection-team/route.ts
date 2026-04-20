@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, unauthorizedResponse } from "@/lib/auth";
 import { db } from "@/lib/db";
 import ExcelJS from "exceljs";
+import { getHoursForDate } from "@/lib/scheduler";
 
 // POST: Export Connection Team schedule to Excel
 export async function POST(request: NextRequest) {
@@ -15,6 +16,26 @@ export async function POST(request: NextRequest) {
     const { monthKey, monthFrom, monthTo } = body;
 
     console.log("[Export Connection Team] Request:", { monthKey, monthFrom, monthTo });
+
+    // Fetch settings to calculate actual hours per day
+    const dbSettings = await db.settings.findFirst();
+    const settings = dbSettings ? {
+      shifts: JSON.parse(dbSettings.shifts || "{}"),
+      weekStart: dbSettings.weekStart || "Friday",
+      holidays: JSON.parse(dbSettings.holidays || "[]"),
+      holidayHours: JSON.parse(dbSettings.holidayHours || "{}"),
+      dayHours: JSON.parse(dbSettings.dayHours || "{}"),
+    } : {
+      shifts: {
+        workingDay: { hours: 6, start: "09:00", end: "15:00" },
+        halfDay: { hours: 3, start: "09:00", end: "12:00" },
+        thursday: { hours: 4.5, start: "09:00", end: "13:30" },
+      },
+      weekStart: "Friday",
+      holidays: [],
+      holidayHours: {},
+      dayHours: {},
+    };
 
     // Fetch connection team entries
     const allEntries = await db.connectionTeam.findMany();
@@ -35,6 +56,18 @@ export async function POST(request: NextRequest) {
     }
 
     console.log("[Export Connection Team] Found entries:", filteredEntries.length);
+
+    // Calculate actual hours for each week based on settings
+    const calcWeekHours = (weekStart: string, weekEnd: string): number => {
+      let total = 0;
+      const start = new Date(weekStart + "T00:00:00");
+      const end = new Date(weekEnd + "T00:00:00");
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        total += getHoursForDate(ds, settings, settings.holidays?.includes(ds) || false);
+      }
+      return total;
+    };
 
     // Create Excel workbook
     const wb = new ExcelJS.Workbook();
@@ -88,26 +121,30 @@ export async function POST(request: NextRequest) {
     });
     ws.getRow(headerRow).height = 28;
 
-    // Aggregate data by employee to calculate correct totals
-    const employeeAggregates = new Map<string, { name: string; hrid: string; weeks: string[] }>();
+    // Aggregate data by employee to calculate correct totals using actual hours
+    const employeeAggregates = new Map<string, { name: string; hrid: string; weeks: string[]; weekDetails: { weekKey: string; hours: number }[] }>();
 
     filteredEntries.forEach((e) => {
       const key = `${e.empHrid}_${e.empName}`;
       if (!employeeAggregates.has(key)) {
-        employeeAggregates.set(key, { name: e.empName, hrid: e.empHrid, weeks: [] });
+        employeeAggregates.set(key, { name: e.empName, hrid: e.empHrid, weeks: [], weekDetails: [] });
       }
       const agg = employeeAggregates.get(key)!;
       const weekKey = `${e.weekStart} >> ${e.weekEnd}`;
       if (!agg.weeks.includes(weekKey)) {
+        const weekHours = calcWeekHours(e.weekStart, e.weekEnd);
         agg.weeks.push(weekKey);
+        agg.weekDetails.push({ weekKey, hours: weekHours });
       }
     });
 
     // Add aggregated data
     let rowIndex = headerRow + 1;
+    let grandTotalHours = 0;
     for (const [key, agg] of employeeAggregates) {
       const rowFill = (rowIndex - headerRow) % 2 === 0 ? "FFFFFF" : "CCFBF1";
-      const totalHours = agg.weeks.length * 42;
+      const totalHours = agg.weekDetails.reduce((sum, w) => sum + w.hours, 0);
+      grandTotalHours += totalHours;
 
       ws.getCell(rowIndex, 1).value = agg.weeks.join(", ");
       ws.getCell(rowIndex, 1).alignment = { horizontal: "left", vertical: "middle", wrapText: true };
@@ -129,7 +166,7 @@ export async function POST(request: NextRequest) {
       ws.getCell(rowIndex, 5).alignment = { horizontal: "center", vertical: "middle" };
       ws.getCell(rowIndex, 5).fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowFill } };
 
-      ws.getCell(rowIndex, 6).value = totalHours;
+      ws.getCell(rowIndex, 6).value = Math.round(totalHours * 10) / 10;
       ws.getCell(rowIndex, 6).numFmt = "0.0";
       ws.getCell(rowIndex, 6).alignment = { horizontal: "center", vertical: "middle" };
       ws.getCell(rowIndex, 6).fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowFill } };
@@ -142,11 +179,10 @@ export async function POST(request: NextRequest) {
     const summaryRow = rowIndex + 1;
     const totalEmployees = employeeAggregates.size;
     const totalWeeks = Array.from(employeeAggregates.values()).reduce((sum, agg) => sum + agg.weeks.length, 0);
-    const totalHours = totalWeeks * 42;
 
     ws.mergeCells(summaryRow, 1, summaryRow, 6);
     const summaryCell = ws.getCell(summaryRow, 1);
-    summaryCell.value = `SUMMARY: ${totalEmployees} employees | ${totalWeeks} total weeks assigned | ${totalHours} total hours`;
+    summaryCell.value = `SUMMARY: ${totalEmployees} employees | ${totalWeeks} total weeks assigned | ${Math.round(grandTotalHours * 10) / 10} total hours`;
     summaryCell.font = { size: 11, bold: true, color: { argb: "0D9488" } };
     summaryCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "CCFBF1" } };
     summaryCell.alignment = { horizontal: "center", vertical: "middle" };

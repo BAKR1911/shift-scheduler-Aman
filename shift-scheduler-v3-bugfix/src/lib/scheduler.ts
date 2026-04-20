@@ -318,8 +318,8 @@ export function generateScheduleForMonth(
     for (const day of week) {
       if (day.getMonth() !== month - 1 || day.getFullYear() !== year) continue;
       const dateStr = formatDate(day);
-      if (holidaySet.has(dateStr)) continue;
-      totalMonthHours += getHoursForDate(dateStr, settings, false);
+      const isHol = holidaySet.has(dateStr);
+      totalMonthHours += getHoursForDate(dateStr, settings, isHol);
     }
   }
 
@@ -377,8 +377,8 @@ export function generateScheduleForMonth(
       const shift = shiftForType(dayType, settings, isHoliday);
       const hrs = getHoursForDate(dateStr, settings, isHoliday);
 
-      // Holidays with 0 hours
-      if (isHoliday || hrs === 0) {
+      // Holidays with 0 hours — simple scoring (no hours benefit)
+      if (hrs === 0) {
         let eligible = workers.filter((i) => i !== lastWorker);
         if (eligible.length === 0) eligible = workers;
 
@@ -404,7 +404,7 @@ export function generateScheduleForMonth(
         continue;
       }
 
-      // === Normal working day ===
+      // === Normal working day (includes holidays with hours > 0) ===
       // CONSTRAINT: No consecutive days
       let eligible = workers.filter((i) => i !== lastWorker);
       if (eligible.length === 0) eligible = [...workers];
@@ -635,6 +635,12 @@ export function recalcScheduleHours(
     if (entry.isManual) return entry;
     const isHolidayDynamic = holidaySet.has(entry.date);
     if (isHolidayDynamic) {
+      // Check holidayHours first - user may have set specific hours for this holiday
+      const hrs = getHoursForDate(entry.date, settings, true);
+      if (hrs > 0) {
+        const shift = shiftForType(entry.dayType, settings, true);
+        return { ...entry, start: shift.start, end: shift.end, hours: hrs, isHoliday: true };
+      }
       return { ...entry, start: "00:00 AM", end: "00:00 AM", hours: 0, isHoliday: true };
     }
     const shift = shiftForType(entry.dayType, settings, false);

@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, unauthorizedResponse } from "@/lib/auth";
 import { db } from "@/lib/db";
 import ExcelJS from "exceljs";
+import { getHoursForDate } from "@/lib/scheduler";
 
 // POST: Export Helpdesk schedule to Excel
 export async function POST(request: NextRequest) {
@@ -336,6 +337,36 @@ export async function POST(request: NextRequest) {
     // ===== SHEET 3: CONNECTION TEAM SUMMARY =====
     const monthKey = month || (dateFrom ? dateFrom.substring(0, 7) : "");
     const connectionEntries = monthKey ? await db.connectionTeam.findMany({ where: { monthKey } }) : await db.connectionTeam.findMany();
+
+    // Fetch settings to calculate actual connection team hours
+    const dbSettings = await db.settings.findFirst();
+    const connSettings = dbSettings ? {
+      shifts: JSON.parse(dbSettings.shifts || "{}"),
+      weekStart: dbSettings.weekStart || "Friday",
+      holidays: JSON.parse(dbSettings.holidays || "[]"),
+      holidayHours: JSON.parse(dbSettings.holidayHours || "{}"),
+      dayHours: JSON.parse(dbSettings.dayHours || "{}"),
+    } : {
+      shifts: {
+        workingDay: { hours: 6, start: "09:00", end: "15:00" },
+        halfDay: { hours: 3, start: "09:00", end: "12:00" },
+        thursday: { hours: 4.5, start: "09:00", end: "13:30" },
+      },
+      weekStart: "Friday",
+      holidays: [],
+      holidayHours: {},
+      dayHours: {},
+    };
+    const calcConnWeekHours = (weekStart: string, weekEnd: string): number => {
+      let total = 0;
+      const start = new Date(weekStart + "T00:00:00");
+      const end = new Date(weekEnd + "T00:00:00");
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        total += getHoursForDate(ds, connSettings, connSettings.holidays?.includes(ds) || false);
+      }
+      return total;
+    };
     
     // Filter by date range
     let filteredConnection = connectionEntries;
@@ -380,25 +411,28 @@ export async function POST(request: NextRequest) {
     });
     ws3.getRow(headerRow3).height = 28;
 
-    // Calculate connection team stats
-    const connStats = new Map<string, { name: string; hrid: string; weeks: string[] }>();
+    // Calculate connection team stats with actual hours from settings
+    const connStats = new Map<string, { name: string; hrid: string; weeks: string[]; weekHours: number[] }>();
     filteredConnection.forEach((ct) => {
       const key = `${ct.empHrid}_${ct.empName}`;
       if (!connStats.has(key)) {
-        connStats.set(key, { name: ct.empName, hrid: ct.empHrid, weeks: [] });
+        connStats.set(key, { name: ct.empName, hrid: ct.empHrid, weeks: [], weekHours: [] });
       }
       const weekKey = `${ct.weekStart} >> ${ct.weekEnd}`;
       const stats = connStats.get(key)!;
       if (!stats.weeks.includes(weekKey)) {
         stats.weeks.push(weekKey);
+        stats.weekHours.push(calcConnWeekHours(ct.weekStart, ct.weekEnd));
       }
     });
 
     // Add connection team data
     let connRow = headerRow3 + 1;
+    let grandTotalConnHours = 0;
     for (const [, stats] of connStats) {
       const rowFill = (connRow - headerRow3) % 2 === 0 ? "FFFFFF" : "CCFBF1";
-      const totalConnHours = stats.weeks.length * 42; // 42 hours per week (7 days * 6 hours)
+      const totalConnHours = stats.weekHours.reduce((sum, h) => sum + h, 0);
+      grandTotalConnHours += totalConnHours;
 
       ws3.getCell(connRow, 1).value = stats.name;
       ws3.getCell(connRow, 1).alignment = { horizontal: "left", vertical: "middle" };
@@ -426,11 +460,11 @@ export async function POST(request: NextRequest) {
     const totalConnSummaryRow = connRow + 1;
     const totalConnEmployees = connStats.size;
     const totalConnWeeks = Array.from(connStats.values()).reduce((sum, stats) => sum + stats.weeks.length, 0);
-    const totalConnHoursAll = totalConnWeeks * 42;
+    const totalConnHoursAll = grandTotalConnHours;
 
     ws3.mergeCells(totalConnSummaryRow, 1, totalConnSummaryRow, 4);
     const summaryCell3 = ws3.getCell(totalConnSummaryRow, 1);
-    summaryCell3.value = `TOTAL: ${totalConnEmployees} employees | ${totalConnWeeks} total weeks assigned | ${totalConnHoursAll} total hours`;
+    summaryCell3.value = `TOTAL: ${totalConnEmployees} employees | ${totalConnWeeks} total weeks assigned | ${Math.round(totalConnHoursAll * 10) / 10} total hours`;
     summaryCell3.font = { size: 12, bold: true, color: { argb: "FFFFFF" } };
     summaryCell3.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "0D9488" } };
     summaryCell3.alignment = { horizontal: "center", vertical: "middle" };

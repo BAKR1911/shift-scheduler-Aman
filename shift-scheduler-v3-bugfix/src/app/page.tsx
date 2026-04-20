@@ -1029,7 +1029,11 @@ export default function ShiftSchedulerPage() {
     try {
       const res = await authFetch("/api/export/connection-team", {
         method: "POST",
-        body: JSON.stringify({ monthKey: selectedMonth }),
+        body: JSON.stringify({
+          monthKey: (!exportHridMonthFrom && !exportHridMonthTo) ? selectedMonth : undefined,
+          monthFrom: exportHridMonthFrom || undefined,
+          monthTo: exportHridMonthTo || undefined,
+        }),
       });
       if (res.status === 401) { handleLogout(); return; }
       if (!res.ok) {
