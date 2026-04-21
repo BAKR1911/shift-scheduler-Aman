@@ -41,6 +41,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       shifts: JSON.parse(settings.shifts),
       weekStart: settings.weekStart,
+      monthStartMode: settings.monthStartMode || "weekStartAligned",
       holidays: JSON.parse(settings.holidays),
       holidayHours: JSON.parse(settings.holidayHours),
       summerTime: settings.summerTime,
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { shifts, weekStart, holidays, holidayHours, summerTime, summerShifts, dayHours } = body;
+    const { shifts, weekStart, monthStartMode, holidays, holidayHours, summerTime, summerShifts, dayHours } = body;
 
     console.log("[Settings API] POST request:", {
       holidaysCount: holidays?.length,
@@ -75,6 +76,7 @@ export async function POST(request: NextRequest) {
       update: {
         shifts: JSON.stringify(shifts),
         weekStart: weekStart || "Friday",
+        monthStartMode: monthStartMode || "weekStartAligned",
         holidays: JSON.stringify(holidays || []),
         holidayHours: JSON.stringify(holidayHours || {}),
         summerTime: Boolean(summerTime),
@@ -85,6 +87,7 @@ export async function POST(request: NextRequest) {
         id: 1,
         shifts: JSON.stringify(shifts),
         weekStart: weekStart || "Friday",
+        monthStartMode: monthStartMode || "weekStartAligned",
         holidays: JSON.stringify(holidays || []),
         holidayHours: JSON.stringify(holidayHours || {}),
         summerTime: Boolean(summerTime),
@@ -104,6 +107,7 @@ export async function POST(request: NextRequest) {
       const settingsObj: import("@/lib/scheduler").Settings = {
         shifts: JSON.parse(result.shifts),
         weekStart: result.weekStart,
+        monthStartMode: result.monthStartMode || "weekStartAligned",
         holidays: JSON.parse(result.holidays),
         holidayHours: JSON.parse(result.holidayHours),
         summerTime: result.summerTime,

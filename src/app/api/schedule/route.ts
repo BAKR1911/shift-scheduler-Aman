@@ -45,6 +45,7 @@ export async function GET(request: NextRequest) {
     const settings: Settings = {
       shifts: dbSettings ? JSON.parse(dbSettings.shifts) : {},
       weekStart: dbSettings?.weekStart || "Friday",
+      monthStartMode: (dbSettings as any)?.monthStartMode || "weekStartAligned",
       holidays: dbSettings ? JSON.parse(dbSettings.holidays) : [],
       holidayHours: dbSettings ? JSON.parse(dbSettings.holidayHours || "{}") : {},
       summerTime: !!dbSettings?.summerTime,
@@ -182,6 +183,7 @@ export async function POST(request: NextRequest) {
     const settings: Settings = {
       shifts: dbSettings ? JSON.parse(dbSettings.shifts) : {},
       weekStart: dbSettings?.weekStart || "Friday",
+      monthStartMode: (dbSettings as any)?.monthStartMode || "weekStartAligned",
       holidays: dbSettings ? JSON.parse(dbSettings.holidays) : [],
       holidayHours: dbSettings ? JSON.parse(dbSettings.holidayHours || "{}") : {},
       summerTime: !!dbSettings?.summerTime,

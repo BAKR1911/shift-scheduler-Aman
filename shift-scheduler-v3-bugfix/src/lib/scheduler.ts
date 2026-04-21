@@ -29,6 +29,12 @@ export interface ShiftConfig {
 export interface Settings {
   shifts: Record<string, ShiftConfig>;
   weekStart: string;
+  /**
+   * Controls how month generation is chunked into "weeks".
+   * - "weekStartAligned": weeks are aligned to settings.weekStart (may include days before the 1st, but those are ignored).
+   * - "monthDay1": week 1 starts at the 1st of the month (every 7 days), ignoring what weekday it is.
+   */
+  monthStartMode?: "weekStartAligned" | "monthDay1";
   holidays: string[];
   holidayHours?: Record<string, number>;
   summerTime?: boolean;
@@ -123,13 +129,21 @@ export function formatDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-function getWeeksInMonth(year: number, month: number, weekStart: string = "Friday"): Date[][] {
+function getWeeksInMonth(
+  year: number,
+  month: number,
+  weekStart: string = "Friday",
+  monthStartMode: "weekStartAligned" | "monthDay1" = "weekStartAligned"
+): Date[][] {
   const weeks: Date[][] = [];
   const firstDay = new Date(year, month - 1, 1);
   const lastDay = new Date(year, month, 0);
-  const targetDay = DAY_NAME_TO_JS_DAY[weekStart] ?? 5;
   let d = new Date(firstDay);
-  while (d.getDay() !== targetDay) d.setDate(d.getDate() - 1);
+
+  if (monthStartMode === "weekStartAligned") {
+    const targetDay = DAY_NAME_TO_JS_DAY[weekStart] ?? 5;
+    while (d.getDay() !== targetDay) d.setDate(d.getDate() - 1);
+  }
 
   while (d <= lastDay) {
     const week: Date[] = [];
@@ -296,7 +310,7 @@ export function generateScheduleForMonth(
   }
 
   const cumStats = initializeCumStats(n, existingCumStats);
-  const weeks = getWeeksInMonth(year, month, settings.weekStart);
+  const weeks = getWeeksInMonth(year, month, settings.weekStart, settings.monthStartMode || "weekStartAligned");
   if (weeks.length === 0) {
     return { entries: [], localStats: {}, cumulativeStats: cumStats, weekOffMap: {} };
   }
@@ -685,7 +699,7 @@ export function getWeekKey(dateStr: string): string {
 }
 
 export function getMonthWeeks(year: number, month: number, weekStart: string = "Friday"): { weekStart: string; weekEnd: string }[] {
-  const weeks = getWeeksInMonth(year, month, weekStart);
+  const weeks = getWeeksInMonth(year, month, weekStart, "weekStartAligned");
   return weeks.map((weekDays) => ({
     weekStart: formatDate(weekDays[0]),
     weekEnd: formatDate(weekDays[6]),

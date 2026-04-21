@@ -95,7 +95,9 @@ function Carousel({
 
   React.useEffect(() => {
     if (!api) return
-    onSelect(api)
+    // Avoid calling setState synchronously inside an effect.
+    // Some consumers pass `onSelect` that updates state (eslint rule: react-hooks/set-state-in-effect).
+    setTimeout(() => onSelect(api), 0)
     api.on("reInit", onSelect)
     api.on("select", onSelect)
 

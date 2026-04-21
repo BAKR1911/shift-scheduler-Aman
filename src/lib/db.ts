@@ -58,6 +58,7 @@ export interface StoreSettings {
   id: number;
   shifts: string;
   weekStart: string;
+  monthStartMode: string;
   holidays: string;
   holidayHours: string;
   summerTime: boolean;
@@ -197,6 +198,7 @@ async function initSchema() {
       id INTEGER PRIMARY KEY DEFAULT 1,
       shifts TEXT NOT NULL DEFAULT '{}',
       week_start TEXT NOT NULL DEFAULT 'Friday',
+      month_start_mode TEXT NOT NULL DEFAULT 'weekStartAligned',
       holidays TEXT NOT NULL DEFAULT '[]',
       holiday_hours TEXT NOT NULL DEFAULT '{}',
       summer_time INTEGER NOT NULL DEFAULT 0,
@@ -293,6 +295,13 @@ async function initSchema() {
     await client.execute("SELECT holiday_hours FROM settings LIMIT 0");
   } catch {
     try { await client.execute("ALTER TABLE settings ADD COLUMN holiday_hours TEXT NOT NULL DEFAULT '{}'"); } catch { /* ignore */ }
+  }
+
+  // Migration: add month_start_mode column to settings if it doesn't exist
+  try {
+    await client.execute("SELECT month_start_mode FROM settings LIMIT 0");
+  } catch {
+    try { await client.execute("ALTER TABLE settings ADD COLUMN month_start_mode TEXT NOT NULL DEFAULT 'weekStartAligned'"); } catch { /* ignore */ }
   }
 
   // Migration: add region column to schedule_entries if it doesn't exist
@@ -474,6 +483,7 @@ function rowToSettings(row: Record<string, unknown>): StoreSettings {
     id: Number(row.id),
     shifts: String(row.shifts),
     weekStart: String(row.week_start),
+    monthStartMode: row.month_start_mode ? String(row.month_start_mode) : "weekStartAligned",
     holidays: String(row.holidays),
     holidayHours: row.holiday_hours ? String(row.holiday_hours) : "{}",
     summerTime: Number(row.summer_time) === 1,
@@ -1071,10 +1081,11 @@ export const db = {
       const existing = await client.execute("SELECT COUNT(*) as cnt FROM settings WHERE id = 1");
       if (Number(existing.rows[0]?.cnt) > 0) {
         await client.execute({
-          sql: "UPDATE settings SET shifts = ?, week_start = ?, holidays = ?, holiday_hours = ?, summer_time = ?, summer_shifts = ?, day_hours = ?, updated_at = ? WHERE id = 1",
+          sql: "UPDATE settings SET shifts = ?, week_start = ?, month_start_mode = ?, holidays = ?, holiday_hours = ?, summer_time = ?, summer_shifts = ?, day_hours = ?, updated_at = ? WHERE id = 1",
           args: [
             args.update.shifts || args.create.shifts,
             args.update.weekStart || args.create.weekStart,
+            args.update.monthStartMode || args.create.monthStartMode || "weekStartAligned",
             args.update.holidays || args.create.holidays,
             args.update.holidayHours || args.create.holidayHours || "{}",
             (args.update.summerTime ?? args.create.summerTime) ? 1 : 0,
@@ -1085,9 +1096,12 @@ export const db = {
         });
       } else {
         await client.execute({
-          sql: "INSERT INTO settings (id, shifts, week_start, holidays, holiday_hours, summer_time, summer_shifts, day_hours, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)",
+          sql: "INSERT INTO settings (id, shifts, week_start, month_start_mode, holidays, holiday_hours, summer_time, summer_shifts, day_hours, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
           args: [
-            args.create.shifts, args.create.weekStart, args.create.holidays,
+            args.create.shifts,
+            args.create.weekStart,
+            args.create.monthStartMode || "weekStartAligned",
+            args.create.holidays,
             args.create.holidayHours || "{}",
             args.create.summerTime ? 1 : 0, args.create.summerShifts, args.create.dayHours || "{}", now,
           ],

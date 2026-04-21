@@ -577,6 +577,7 @@ export default function ShiftSchedulerPage() {
 
   useEffect(() => {
     if (isAuthenticated) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       fetchAllData();
     }
   }, [isAuthenticated, fetchAllData]);
@@ -613,6 +614,7 @@ export default function ShiftSchedulerPage() {
 
   useEffect(() => {
     if (isAuthenticated && !dataLoading) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       fetchScheduleEntries();
       fetchBalance();
       fetchConnectionTeam();
@@ -2412,8 +2414,30 @@ export default function ShiftSchedulerPage() {
                   {Object.entries(editSettings.shifts).map(([key, shift]) => (
                     <div key={key} className="grid grid-cols-3 gap-2 items-center">
                       <Label className="text-xs font-medium text-slate-600 dark:text-slate-300">{key === "Weekday" ? "Weekday (Sun-Wed)" : key === "Holiday" ? "Holiday (Official Off)" : key}</Label>
-                      <Input value={shift.start} onChange={(e) => { editSettings.shifts[key].start = e.target.value; setEditSettings({ ...editSettings }); }} className="h-8 text-xs" placeholder="05:00 PM" />
-                      <Input value={shift.end} onChange={(e) => { editSettings.shifts[key].end = e.target.value; setEditSettings({ ...editSettings }); }} className="h-8 text-xs" placeholder="10:00 PM" />
+                      <Input
+                        value={shift.start}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setEditSettings((prev) => {
+                            if (!prev) return prev;
+                            return { ...prev, shifts: { ...prev.shifts, [key]: { ...prev.shifts[key], start: v } } };
+                          });
+                        }}
+                        className="h-8 text-xs"
+                        placeholder="05:00 PM"
+                      />
+                      <Input
+                        value={shift.end}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setEditSettings((prev) => {
+                            if (!prev) return prev;
+                            return { ...prev, shifts: { ...prev.shifts, [key]: { ...prev.shifts[key], end: v } } };
+                          });
+                        }}
+                        className="h-8 text-xs"
+                        placeholder="10:00 PM"
+                      />
                     </div>
                   ))}
                 </div>
@@ -2422,7 +2446,20 @@ export default function ShiftSchedulerPage() {
                   {Object.entries(editSettings.shifts).map(([key, shift]) => (
                     <div key={key} className="flex items-center justify-between">
                       <Label className="text-xs text-slate-600 dark:text-slate-300">{key === "Weekday" ? "Weekday (Sun-Wed)" : key === "Holiday" ? "Holiday (Official Off)" : key}</Label>
-                      <Input type="number" value={shift.hours} onChange={(e) => { editSettings.shifts[key].hours = Number(e.target.value); setEditSettings({ ...editSettings }); }} className="w-20 h-8 text-xs text-center" min={1} max={12} />
+                      <Input
+                        type="number"
+                        value={shift.hours}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          setEditSettings((prev) => {
+                            if (!prev) return prev;
+                            return { ...prev, shifts: { ...prev.shifts, [key]: { ...prev.shifts[key], hours: v } } };
+                          });
+                        }}
+                        className="w-20 h-8 text-xs text-center"
+                        min={1}
+                        max={12}
+                      />
                     </div>
                   ))}
                 </div>
@@ -2435,14 +2472,47 @@ export default function ShiftSchedulerPage() {
                       {Object.entries(editSettings.summerShifts).map(([key, shift]) => (
                         <div key={key} className="grid grid-cols-3 gap-2 items-center">
                           <Label className="text-xs font-medium text-slate-600 dark:text-slate-300">{key === "Weekday" ? "Weekday (Sun-Wed)" : key}</Label>
-                          <Input value={shift.start} onChange={(e) => { editSettings.summerShifts[key].start = e.target.value; setEditSettings({ ...editSettings }); }} className="h-8 text-xs" />
-                          <Input value={shift.end} onChange={(e) => { editSettings.summerShifts[key].end = e.target.value; setEditSettings({ ...editSettings }); }} className="h-8 text-xs" />
+                          <Input
+                            value={shift.start}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setEditSettings((prev) => {
+                                if (!prev) return prev;
+                                return { ...prev, summerShifts: { ...prev.summerShifts, [key]: { ...prev.summerShifts[key], start: v } } };
+                              });
+                            }}
+                            className="h-8 text-xs"
+                          />
+                          <Input
+                            value={shift.end}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setEditSettings((prev) => {
+                                if (!prev) return prev;
+                                return { ...prev, summerShifts: { ...prev.summerShifts, [key]: { ...prev.summerShifts[key], end: v } } };
+                              });
+                            }}
+                            className="h-8 text-xs"
+                          />
                         </div>
                       ))}
                       {Object.entries(editSettings.summerShifts).map(([key, shift]) => (
                         <div key={`hrs-${key}`} className="flex items-center justify-between">
                           <Label className="text-xs text-slate-600 dark:text-slate-300">{key === "Weekday" ? "Weekday (Sun-Wed)" : key} hours</Label>
-                          <Input type="number" value={shift.hours} onChange={(e) => { editSettings.summerShifts[key].hours = Number(e.target.value); setEditSettings({ ...editSettings }); }} className="w-20 h-8 text-xs text-center" min={1} max={12} />
+                          <Input
+                            type="number"
+                            value={shift.hours}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              setEditSettings((prev) => {
+                                if (!prev) return prev;
+                                return { ...prev, summerShifts: { ...prev.summerShifts, [key]: { ...prev.summerShifts[key], hours: v } } };
+                              });
+                            }}
+                            className="w-20 h-8 text-xs text-center"
+                            min={1}
+                            max={12}
+                          />
                         </div>
                       ))}
                     </div>
