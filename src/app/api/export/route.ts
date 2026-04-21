@@ -237,20 +237,15 @@ export async function POST(request: NextRequest) {
       weekGroups[wk].push(e);
     }
 
-    // Build a map from week entries to their Friday-based weekStart
-    function getFridayOfWeek(dateStr: string): string {
-      const d = new Date(dateStr + "T00:00:00");
-      while (d.getDay() !== 5) d.setDate(d.getDate() - 1);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    }
-
     let weekIndex = 0;
     for (const wk of Object.keys(weekGroups).sort()) {
       const weekEntries = weekGroups[wk];
+      weekEntries.sort((a, b) => a.date.localeCompare(b.date));
       const wh = weekEntries.reduce((s, e) => s + e.hours, 0);
       const offPerson = weekEntries[0].offPerson;
-      const weekFriStart = getFridayOfWeek(weekEntries[0].date);
-      const connPerson = connByWeek.get(weekFriStart);
+      // IMPORTANT: Connection Team weeks are keyed by their actual generated weekStart.
+      // With monthStartMode="monthDay1", week start is NOT guaranteed to be Friday.
+      const connPerson = connByWeek.get(weekEntries[0].date);
 
       // Build week header text
       let weekHeaderText = `Week ${weekIndex + 1}: ${weekEntries[0].date} >> ${weekEntries[weekEntries.length - 1].date}  |  ${weekEntries.length} days  |  ${wh.toFixed(1)}h  |  OFF: ${offPerson}`;

@@ -1,7 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, unauthorizedResponse } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { getHoursForDate, type Settings } from "@/lib/scheduler";
 import ExcelJS from "exceljs";
+
+function formatDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function calcWeekHours(weekStart: string, weekEnd: string, settings: Settings): number {
+  const holidaySet = new Set(settings.holidays || []);
+  const start = new Date(weekStart + "T00:00:00");
+  const end = new Date(weekEnd + "T00:00:00");
+  let total = 0;
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const ds = formatDate(d);
+    total += getHoursForDate(ds, settings, holidaySet.has(ds));
+  }
+  return total;
+}
 
 // POST: Export Connection Team schedule to Excel
 export async function POST(request: NextRequest) {
@@ -13,6 +33,17 @@ export async function POST(request: NextRequest) {
     const { monthKey, monthFrom, monthTo } = body;
 
     console.log("[Export Connection Team] Request:", { monthKey, monthFrom, monthTo });
+
+    const dbSettings = await db.settings.findUnique();
+    const settings: Settings = {
+      shifts: dbSettings ? JSON.parse(dbSettings.shifts) : {},
+      weekStart: dbSettings?.weekStart || "Friday",
+      holidays: dbSettings ? JSON.parse(dbSettings.holidays) : [],
+      holidayHours: dbSettings ? JSON.parse(dbSettings.holidayHours || "{}") : {},
+      summerTime: Boolean(dbSettings?.summerTime),
+      summerShifts: dbSettings ? JSON.parse(dbSettings.summerShifts || "{}") : {},
+      dayHours: dbSettings ? JSON.parse(dbSettings.dayHours || "{}") : {},
+    };
 
     // Fetch connection team entries
     const allEntries = await db.connectionTeam.findMany();
@@ -105,7 +136,11 @@ export async function POST(request: NextRequest) {
     let rowIndex = headerRow + 1;
     for (const [key, agg] of employeeAggregates) {
       const rowFill = (rowIndex - headerRow) % 2 === 0 ? "FFFFFF" : "CCFBF1";
-      const totalHours = agg.weeks.length * 42;
+      const totalHours = agg.weeks.reduce((sum, wk) => {
+        const [weekStartStr, weekEndStr] = wk.split(" >> ").map((s) => s.trim());
+        if (!weekStartStr || !weekEndStr) return sum;
+        return sum + calcWeekHours(weekStartStr, weekEndStr, settings);
+      }, 0);
 
       ws.getCell(rowIndex, 1).value = agg.weeks.join(", ");
       ws.getCell(rowIndex, 1).alignment = { horizontal: "left", vertical: "middle", wrapText: true };
@@ -140,7 +175,14 @@ export async function POST(request: NextRequest) {
     const summaryRow = rowIndex + 1;
     const totalEmployees = employeeAggregates.size;
     const totalWeeks = Array.from(employeeAggregates.values()).reduce((sum, agg) => sum + agg.weeks.length, 0);
-    const totalHours = totalWeeks * 42;
+    const totalHours = Array.from(employeeAggregates.values()).reduce((sum, agg) => {
+      const empHours = agg.weeks.reduce((s, wk) => {
+        const [weekStartStr, weekEndStr] = wk.split(" >> ").map((x) => x.trim());
+        if (!weekStartStr || !weekEndStr) return s;
+        return s + calcWeekHours(weekStartStr, weekEndStr, settings);
+      }, 0);
+      return sum + empHours;
+    }, 0);
 
     ws.mergeCells(summaryRow, 1, summaryRow, 6);
     const summaryCell = ws.getCell(summaryRow, 1);

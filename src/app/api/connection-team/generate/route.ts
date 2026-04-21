@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, isAdmin } from "@/lib/auth";
 import { generateConnectionTeamSchedule } from "@/lib/scheduler";
 import { db } from "@/lib/db";
+import { buildWeeksForMonth } from "@/lib/weeks";
 
 // POST: Generate Connection Team schedule for a month (Target-Based Balancing)
 // Supports `force: true` to regenerate already-generated months
@@ -18,10 +19,20 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { monthKey, weeks, force } = body;
+    const { monthKey, force } = body;
 
-    if (!monthKey || !weeks || !Array.isArray(weeks)) {
-      return NextResponse.json({ error: "monthKey and weeks are required" }, { status: 400 });
+    if (!monthKey) {
+      return NextResponse.json({ error: "monthKey is required" }, { status: 400 });
+    }
+
+    // Backend is the source of truth for weeks (settings.weekStart + settings.monthStartMode)
+    const dbSettings = await db.settings.findUnique();
+    const weeks = buildWeeksForMonth(monthKey, {
+      weekStart: dbSettings?.weekStart || "Friday",
+      monthStartMode: (dbSettings as any)?.monthStartMode || "weekStartAligned",
+    });
+    if (weeks.length === 0) {
+      return NextResponse.json({ error: "No weeks found for this month" }, { status: 400 });
     }
 
     // === PROTECTION: Don't regenerate already-generated months ===
@@ -118,6 +129,7 @@ export async function POST(request: NextRequest) {
       success: true,
       generated: created,
       assignments,
+      weeks,
     });
   } catch (error) {
     console.error("Error generating Connection Team schedule:", error);

@@ -1382,33 +1382,11 @@ export default function ShiftSchedulerPage() {
     const year = Number(y);
     const month = Number(m);
 
-    // Build weeks for the selected month
-    const weeks: { weekStart: string; weekEnd: string }[] = [];
-    let d = new Date(year, month - 1, 1);
-    // Find first Friday
-    while (d.getDay() !== 5) d.setDate(d.getDate() - 1);
-    // Get all weeks in month
-    const lastDay = new Date(year, month, 0);
-    while (d <= lastDay) {
-      const weekEnd = new Date(d);
-      weekEnd.setDate(weekEnd.getDate() + 6);
-      weeks.push({
-        weekStart: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
-        weekEnd: `${weekEnd.getFullYear()}-${String(weekEnd.getMonth() + 1).padStart(2, "0")}-${String(weekEnd.getDate()).padStart(2, "0")}`,
-      });
-      d.setDate(d.getDate() + 7);
-    }
-
-    if (weeks.length === 0) {
-      toast({ title: "Error", description: "No weeks found for this month", variant: "destructive" });
-      return;
-    }
-
     setGenerating(true);
     try {
       const res = await authFetch("/api/connection-team/generate", {
         method: "POST",
-        body: JSON.stringify({ monthKey: selectedMonth, weeks }),
+        body: JSON.stringify({ monthKey: selectedMonth }),
       });
       if (res.ok) {
         const data = await res.json();

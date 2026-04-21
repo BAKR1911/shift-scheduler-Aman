@@ -2,6 +2,26 @@ import { NextRequest, NextResponse } from "next/server";
 import { checkAuth, unauthorizedResponse } from "@/lib/auth";
 import { db } from "@/lib/db";
 import ExcelJS from "exceljs";
+import { getHoursForDate, type Settings } from "@/lib/scheduler";
+
+function formatDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function calcWeekHours(weekStart: string, weekEnd: string, settings: Settings): number {
+  const holidaySet = new Set(settings.holidays || []);
+  const start = new Date(weekStart + "T00:00:00");
+  const end = new Date(weekEnd + "T00:00:00");
+  let total = 0;
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const ds = formatDate(d);
+    total += getHoursForDate(ds, settings, holidaySet.has(ds));
+  }
+  return total;
+}
 
 // POST: Export Helpdesk schedule to Excel
 export async function POST(request: NextRequest) {
@@ -15,6 +35,17 @@ export async function POST(request: NextRequest) {
     const regionList: string[] = Array.isArray(regions) ? regions : (regions ? [regions] : []);
 
     console.log("[Export Helpdesk] Request:", { month, selectedEmployeeIds, dateFrom, dateTo, regions: regionList });
+
+    const dbSettings = await db.settings.findUnique();
+    const settings: Settings = {
+      shifts: dbSettings ? JSON.parse(dbSettings.shifts) : {},
+      weekStart: dbSettings?.weekStart || "Friday",
+      holidays: dbSettings ? JSON.parse(dbSettings.holidays) : [],
+      holidayHours: dbSettings ? JSON.parse(dbSettings.holidayHours || "{}") : {},
+      summerTime: Boolean(dbSettings?.summerTime),
+      summerShifts: dbSettings ? JSON.parse(dbSettings.summerShifts || "{}") : {},
+      dayHours: dbSettings ? JSON.parse(dbSettings.dayHours || "{}") : {},
+    };
 
     // Fetch all schedule entries and employees
     const allEntries = await db.scheduleEntry.findMany();
@@ -390,7 +421,11 @@ export async function POST(request: NextRequest) {
     let connRow = headerRow3 + 1;
     for (const [, stats] of connStats) {
       const rowFill = (connRow - headerRow3) % 2 === 0 ? "FFFFFF" : "CCFBF1";
-      const totalConnHours = stats.weeks.length * 42; // 42 hours per week (7 days * 6 hours)
+      const totalConnHours = stats.weeks.reduce((sum, wk) => {
+        const [weekStartStr, weekEndStr] = wk.split(" >> ").map((s) => s.trim());
+        if (!weekStartStr || !weekEndStr) return sum;
+        return sum + calcWeekHours(weekStartStr, weekEndStr, settings);
+      }, 0);
 
       ws3.getCell(connRow, 1).value = stats.name;
       ws3.getCell(connRow, 1).alignment = { horizontal: "left", vertical: "middle" };
@@ -418,7 +453,14 @@ export async function POST(request: NextRequest) {
     const totalConnSummaryRow = connRow + 1;
     const totalConnEmployees = connStats.size;
     const totalConnWeeks = Array.from(connStats.values()).reduce((sum, stats) => sum + stats.weeks.length, 0);
-    const totalConnHoursAll = totalConnWeeks * 42;
+    const totalConnHoursAll = Array.from(connStats.values()).reduce((sum, stats) => {
+      const empHours = stats.weeks.reduce((s, wk) => {
+        const [weekStartStr, weekEndStr] = wk.split(" >> ").map((x) => x.trim());
+        if (!weekStartStr || !weekEndStr) return s;
+        return s + calcWeekHours(weekStartStr, weekEndStr, settings);
+      }, 0);
+      return sum + empHours;
+    }, 0);
 
     ws3.mergeCells(totalConnSummaryRow, 1, totalConnSummaryRow, 4);
     const summaryCell3 = ws3.getCell(totalConnSummaryRow, 1);

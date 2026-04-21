@@ -105,12 +105,8 @@ function shiftForType(dayType: string, settings: Settings, isHoliday: boolean): 
 }
 
 export function getHoursForDate(dateStr: string, settings: Settings, isHoliday: boolean): number {
-  if (isHoliday) {
-    if (settings.holidayHours && settings.holidayHours[dateStr] !== undefined) {
-      return settings.holidayHours[dateStr];
-    }
-    return 0;
-  }
+  // Holidays are always OFF (0 hours), regardless of any holidayHours overrides.
+  if (isHoliday) return 0;
   if (settings.dayHours && settings.dayHours[dateStr] !== undefined) {
     return settings.dayHours[dateStr];
   }
@@ -318,8 +314,8 @@ export function generateScheduleForMonth(
     for (const day of week) {
       if (day.getMonth() !== month - 1 || day.getFullYear() !== year) continue;
       const dateStr = formatDate(day);
-      if (holidaySet.has(dateStr)) continue;
-      totalMonthHours += getHoursForDate(dateStr, settings, false);
+      const isHoliday = holidaySet.has(dateStr);
+      totalMonthHours += getHoursForDate(dateStr, settings, isHoliday);
     }
   }
 
